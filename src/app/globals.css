@@ -1,0 +1,176 @@
+@import "tailwindcss";
+
+/*
+ * Thinkswell brand tokens (from thinkswell.com): navy #111522, cyan #49cbed,
+ * gold #f7bd45, purple #7434ca, coral #ff5a36, cream #f7f2e8.
+ * Type: DM Sans (UI + numbers) and DM Serif Display (headlines).
+ */
+@theme {
+  --font-sans: "DM Sans Variable", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "DM Serif Display", Georgia, serif;
+
+  --color-ink-950: #080b14;
+  --color-ink-900: #0c1020;
+  --color-ink-850: #111522;
+  --color-ink-800: #151a2c;
+  --color-ink-750: #1b2136;
+  --color-ink-700: #232a42;
+  --color-ink-600: #313956;
+
+  --color-fg: #f8fbff;
+  --color-fg-2: #b9c2d3;
+  --color-fg-3: #8290a8;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-line-strong: rgb(255 255 255 / 0.14);
+
+  --color-cyan: #49cbed;
+  --color-gold: #f7bd45;
+  --color-purple: #7434ca;
+  --color-violet: #a47cff;
+  --color-coral: #ff5a36;
+  --color-cream: #f7f2e8;
+
+  --color-good: #3ddc97;
+  --color-bad: #ff6b6b;
+
+  /* Chart series, stepped for the dark card surface and CVD-validated as a set. */
+  --color-series-1: #189cc3;
+  --color-series-2: #9466f0;
+  --color-series-3: #bd8618;
+  --color-series-4: #ec5234;
+
+  --animate-rise: rise 0.7s cubic-bezier(0.23, 1, 0.32, 1) both;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-float: float 6s ease-in-out infinite;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background: var(--color-ink-900);
+}
+
+body {
+  min-height: 100dvh;
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(1100px 620px at 8% -8%, rgb(73 203 237 / 0.1), transparent 60%),
+    radial-gradient(900px 560px at 100% -4%, rgb(116 52 202 / 0.2), transparent 62%),
+    radial-gradient(800px 500px at 50% 110%, rgb(247 189 69 / 0.05), transparent 60%),
+    var(--color-ink-900);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint dot grid, fading out down the page. */
+.tw-texture {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(rgb(255 255 255 / 0.05) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(to bottom, black, transparent 70%);
+}
+
+@layer components {
+  .eyebrow {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-fg-3);
+  }
+
+  .tw-card {
+    position: relative;
+    border-radius: 1.5rem;
+    border: 1px solid var(--color-line);
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 0.035), rgb(255 255 255 / 0.01)),
+      var(--color-ink-800);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 24px 48px -28px rgb(0 0 0 / 0.7);
+  }
+
+  .tw-input {
+    width: 100%;
+    border-radius: 0.875rem;
+    border: 1px solid var(--color-line-strong);
+    background: var(--color-ink-900);
+    padding: 0.7rem 0.9rem;
+    font-size: 0.95rem;
+    color: var(--color-fg);
+    outline: none;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+  }
+  .tw-input::placeholder {
+    color: var(--color-fg-3);
+  }
+  .tw-input:focus {
+    border-color: rgb(73 203 237 / 0.7);
+    box-shadow: 0 0 0 4px rgb(73 203 237 / 0.15);
+  }
+
+  .tw-label {
+    display: block;
+    margin-bottom: 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-fg-2);
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-600) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
