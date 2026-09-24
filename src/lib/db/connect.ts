@@ -23,14 +23,20 @@ export async function createDb(): Promise<Db> {
     );
   }
   if (url) {
-    const { default: postgres } = await import("postgres");
-    const { drizzle } = await import("drizzle-orm/postgres-js");
-    const client = postgres(url, {
-      // Supabase's transaction pooler (port 6543) doesn't support prepared statements.
-      prepare: false,
+    // node-postgres runs one query per connection at a time. (postgres.js pipelines
+    // concurrent queries on a connection, which stalls behind Supabase's
+    // transaction-mode pooler.)
+    const { Pool } = await import("pg");
+    const { drizzle } = await import("drizzle-orm/node-postgres");
+    const pool = new Pool({
+      ...pgConnectionConfig(url),
       max: Number(process.env.DATABASE_POOL_MAX ?? 5),
+      idleTimeoutMillis: 10_000,
+      // Fail loudly instead of hanging if the database is unreachable or stuck.
+      connectionTimeoutMillis: 10_000,
+      query_timeout: 30_000,
     });
-    return drizzle(client, { schema }) as unknown as Db;
+    return drizzle(pool, { schema }) as unknown as Db;
   }
 
   if (process.env.VERCEL) {
@@ -45,9 +51,23 @@ export async function createDb(): Promise<Db> {
   return drizzle(client, { schema }) as unknown as Db;
 }
 
+/**
+ * Encrypt connections to remote databases. Supabase's certificate chains to its
+ * own CA (not in Node's store), so the connection is encrypted without chain
+ * verification. Local databases and DATABASE_SSL=disable connect in plain text.
+ */
+export function pgConnectionConfig(url: string) {
+  const u = new URL(url);
+  const local = ["localhost", "127.0.0.1", "::1"].includes(u.hostname);
+  const disable = process.env.DATABASE_SSL === "disable" || u.searchParams.get("sslmode") === "disable";
+  // node-postgres lets URL ssl params override the ssl option, so drop them and decide here.
+  for (const k of ["sslmode", "ssl", "sslrootcert", "sslcert", "sslkey"]) u.searchParams.delete(k);
+  return { connectionString: u.toString(), ssl: local || disable ? false : { rejectUnauthorized: false } };
+}
+
 export async function runMigrations(db: Db) {
   if (process.env.DATABASE_URL) {
-    const { migrate } = await import("drizzle-orm/postgres-js/migrator");
+    const { migrate } = await import("drizzle-orm/node-postgres/migrator");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await migrate(db as any, { migrationsFolder: MIGRATIONS_DIR });
   } else {
