@@ -39,6 +39,12 @@ Local data lives in `.data/pglite` (git-ignored). Delete that folder and re-run
 
 ## Going live: Vercel + Supabase + Windsor
 
+**Vercel project:** `thinkswell-advertising-dashboard` in the Thinkswell team
+(`timthinkswellcs-projects`), linked to this repo. Every push to the production branch
+deploys to https://thinkswell-advertising-dashboard.vercel.app. `AUTH_SECRET`,
+`CRON_SECRET`, `APP_TIMEZONE` and `SYNC_LOOKBACK_DAYS` are already set there.
+Still needed: `DATABASE_URL` (Supabase) and `WINDSOR_API_KEY`, then a redeploy.
+
 1. **Supabase:** create a project. In *Connect → Transaction pooler*, copy the connection
    string (port `6543`).
 2. **Migrate + first admin** (from your machine, pointing at Supabase):

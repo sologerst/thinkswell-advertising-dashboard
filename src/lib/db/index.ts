@@ -10,7 +10,13 @@ export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
 const globalForDb = globalThis as unknown as { __twDb?: Promise<Db> };
 
 export function getDb(): Promise<Db> {
-  if (!globalForDb.__twDb) globalForDb.__twDb = createDb();
+  if (!globalForDb.__twDb) {
+    // Don't cache a failure (e.g. DATABASE_URL missing); the next request retries.
+    globalForDb.__twDb = createDb().catch((e) => {
+      globalForDb.__twDb = undefined;
+      throw e;
+    });
+  }
   return globalForDb.__twDb;
 }
 
