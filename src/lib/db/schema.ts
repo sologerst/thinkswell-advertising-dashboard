@@ -228,6 +228,8 @@ export const ads = pgTable(
     thumbnailUrl: text("thumbnail_url"),
     body: text("body"),
     title: text("title"),
+    /** Raw creative asset fields from Windsor (image/video URLs, preview links); see src/lib/creative.ts. */
+    creative: jsonb("creative").$type<CreativeFields>(),
   },
   (t) => [index("ads_campaign_idx").on(t.campaignId)],
 );
@@ -306,6 +308,9 @@ export const clientAccountsRelations = relations(clientAccounts, ({ one }) => ({
 export const clientCampaignsRelations = relations(clientCampaigns, ({ one }) => ({
   client: one(clients, { fields: [clientCampaigns.clientId], references: [clients.id] }),
 }));
+
+/** Windsor creative fields stored per ad, keyed by Windsor field ID. */
+export type CreativeFields = Record<string, string | null>;
 
 export type User = typeof users.$inferSelect;
 export type Client = typeof clients.$inferSelect;

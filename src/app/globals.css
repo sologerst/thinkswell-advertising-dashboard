@@ -163,6 +163,49 @@ body {
     scrollbar-width: thin;
     scrollbar-color: var(--color-ink-600) transparent;
   }
+
+  /* Creative previews on ad cards */
+  .play-btn {
+    display: grid;
+    place-items: center;
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 9999px;
+    color: var(--color-ink-850);
+    background: rgb(255 255 255 / 0.92);
+    box-shadow:
+      0 0 0 6px rgb(255 255 255 / 0.18),
+      0 12px 32px -8px rgb(0 0 0 / 0.6);
+    transition:
+      transform 0.2s,
+      box-shadow 0.2s,
+      background 0.2s;
+  }
+  .play-btn:hover,
+  .play-btn:focus-visible {
+    transform: scale(1.08);
+    background: var(--color-cyan);
+    box-shadow:
+      0 0 0 8px rgb(73 203 237 / 0.25),
+      0 12px 32px -8px rgb(73 203 237 / 0.6);
+  }
+  .carousel-btn {
+    position: absolute;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    translate: 0 -50%;
+    border-radius: 9999px;
+    color: white;
+    background: rgb(0 0 0 / 0.45);
+    backdrop-filter: blur(8px);
+    transition: background 0.15s;
+  }
+  .carousel-btn:hover {
+    background: rgb(0 0 0 / 0.7);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

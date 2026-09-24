@@ -1,7 +1,8 @@
 import "server-only";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, max, notInArray, sql, type SQL } from "drizzle-orm";
+import { adMedia, type AdMedia } from "@/lib/creative";
 import { getDb } from "@/lib/db";
-import { adSets, ads, campaigns, clientAccounts, clientCampaigns, insights, type Client } from "@/lib/db/schema";
+import { adSets, ads, campaigns, clientAccounts, clientCampaigns, insights, type Client, type CreativeFields } from "@/lib/db/schema";
 import { eachDay, type ISODate } from "@/lib/dates";
 import { BASE_FIELDS, emptyTotals, type BaseField, type Totals } from "./catalog";
 
@@ -199,7 +200,7 @@ export type AdRow = Totals & {
   id: string;
   name: string;
   status: string | null;
-  thumbnailUrl: string | null;
+  media: AdMedia;
   title: string | null;
   body: string | null;
   adSetName: string | null;
@@ -213,6 +214,7 @@ export async function getByAd(scope: Scope, f: Filters): Promise<AdRow[]> {
       name: sql<string>`coalesce(max(${ads.name}), ${insights.adId})`,
       status: sql<string | null>`max(${ads.status})`,
       thumbnailUrl: sql<string | null>`max(${ads.thumbnailUrl})`,
+      creative: sql<CreativeFields | null>`any_value(${ads.creative})`,
       title: sql<string | null>`max(${ads.title})`,
       body: sql<string | null>`max(${ads.body})`,
       adSetName: sql<string | null>`max(${adSets.name})`,
@@ -228,7 +230,7 @@ export async function getByAd(scope: Scope, f: Filters): Promise<AdRow[]> {
     id: r.id,
     name: r.name,
     status: r.status,
-    thumbnailUrl: r.thumbnailUrl,
+    media: adMedia({ name: r.name, thumbnailUrl: r.thumbnailUrl, creative: r.creative }),
     title: r.title,
     body: r.body,
     adSetName: r.adSetName,

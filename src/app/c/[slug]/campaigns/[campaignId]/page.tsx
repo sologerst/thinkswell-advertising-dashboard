@@ -11,6 +11,7 @@ import { DashboardHeader } from "@/components/dashboard/page-header";
 import { PlatformSplit } from "@/components/dashboard/platform-split";
 import { Card, SectionTitle, StatusPill } from "@/components/ui";
 import { loadClientContext, setupFor } from "@/lib/client-context";
+import { isAdOff } from "@/lib/creative";
 import { getDb } from "@/lib/db";
 import { adAccounts } from "@/lib/db/schema";
 import { addDays, fmtDayYear, fmtRange, fmtWeekday } from "@/lib/dates";
@@ -62,6 +63,7 @@ export default async function CampaignPage({ params, searchParams }: Props) {
 
   const cur = sumRows(daily);
   const prev = sumRows(prevDaily);
+  const liveAds = adRows.filter((a) => !isAdOff(a.status)).length;
   const all = sumRows(allDaily);
   const spend = kpiFor(getMetric("spend")!, cur, prev, daily);
   const kpis = clientKpis(setup).map((m) => kpiFor(m, cur, prev, daily));
@@ -237,7 +239,11 @@ export default async function CampaignPage({ params, searchParams }: Props) {
         <SectionTitle
           eyebrow="Creative"
           title="Ads in this campaign"
-          action={<span className="text-xs text-fg-3">{formatMetric(adRows.length, "number")} ads delivered</span>}
+          action={
+            <span className="text-xs text-fg-3">
+              {formatMetric(liveAds, "number")} live · {formatMetric(adRows.length - liveAds, "number")} paused or ended
+            </span>
+          }
           className="mb-4"
         />
         <AdCards ads={adRows} resultMetric={resultMetric} costMetric={costMetric} />

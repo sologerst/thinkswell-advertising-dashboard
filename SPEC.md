@@ -103,7 +103,7 @@ The goal's "result" drives day cards, campaign tables, ad cards and highlights.
 
 **Campaigns** (`/c/<slug>/campaigns`): summary stats, then the full sortable/searchable table with a goal-specific extra column (ROAS, lead rate, CPM or LPVs).
 
-**Campaign detail** (`/c/<slug>/campaigns/<id>`): status, objective, flight dates, KPI cards (spend card shows share of total spend), trend chart, day-by-day table with bars, FB vs IG split, ad sets table and ad creative cards (thumbnail, copy, spend, results, cost, CTR, "Top performer").
+**Campaign detail** (`/c/<slug>/campaigns/<id>`): status, objective, flight dates, KPI cards (spend card shows share of total spend), trend chart, day-by-day table with bars, FB vs IG split, ad sets table and ad creative cards (the real image, a playable video or a swipeable carousel, plus a link to Meta's ad preview; copy, spend, results, cost, CTR, "Top performer"). Live ads come first; paused and ended ads sit in a collapsible "Paused & ended" section (open when nothing is running).
 
 ## 6. Admin console
 
@@ -122,14 +122,16 @@ CLI `npm run sync` ──┘      │
                             └─ per ad account:
                                  1. GET connectors.windsor.ai/facebook  (daily × ad × publisher_platform metrics)
                                  2. GET connectors.windsor.ai/facebook  (statuses, objectives, thumbnails; no breakdown)
-                                 3. upsert campaigns / ad_sets / ads
-                                 4. delete + insert `insights` for the window (in one transaction)
+                                 3. GET connectors.windsor.ai/facebook  (creative: image / video URLs, preview links)
+                                 4. upsert campaigns / ad_sets / ads
+                                 5. delete + insert `insights` for the window (in one transaction)
 ```
 
 - Dashboards read only from Postgres, so they're fast, never hit Windsor rate limits, and keep working if Windsor has an outage.
 - Each run re-pulls a rolling window (`SYNC_LOOKBACK_DAYS`, default 7) because Meta keeps attributing conversions for up to ~28 days. The Data page has 30 and 90-day buttons for backfills.
 - Meta won't combine the `publisher_platform` breakdown with `omni_*` fields, so metrics use the non-omni action types, and metadata comes from a second breakdown-free call.
 - Field mapping lives in `src/lib/sync/windsor-sync.ts` (`METRIC_FIELDS`). To count e.g. pixel-only purchases, change `actions_purchase` to `actions_offsite_conversion_fb_pixel_purchase` there.
+- Steps 2 and 3 cover at least the last 120 days, so ads that stopped delivering still get current statuses and fresh creative links (Meta CDN links expire after a few days). Creative fields are stored raw in `ads.creative` and interpreted in `src/lib/creative.ts`; if Windsor rejects the combined request, each field group is retried on its own.
 - Every run is logged in `sync_runs`. Per-account failures become warnings and don't abort the rest of the run.
 
 | Our column | Windsor field |
@@ -161,7 +163,7 @@ client_campaigns(client_id, campaign_id)      -- include/exclude list
 ad_accounts(id, name, currency, source, last_synced_at)
 campaigns(id, account_id, name, status, objective, …)
 ad_sets(id, campaign_id, account_id, name, status)
-ads(id, ad_set_id, campaign_id, account_id, name, status, thumbnail_url, title, body)
+ads(id, ad_set_id, campaign_id, account_id, name, status, thumbnail_url, title, body, creative jsonb)
 insights(date, account_id, campaign_id, ad_set_id, ad_id, platform, spend, impressions, reach, clicks,
          link_clicks, landing_page_views, purchases, purchase_value, add_to_cart, initiate_checkout,
          leads, video_views, thruplays, post_engagement)   UNIQUE(date, ad_id, platform)

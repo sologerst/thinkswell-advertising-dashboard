@@ -1,6 +1,9 @@
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type * as schemaTypes from "@/lib/db/schema";
+import { CREATIVE_FIELD_GROUPS, CREATIVE_FIELDS } from "@/lib/creative";
+import { addDays } from "@/lib/dates";
+import type { CreativeFields } from "@/lib/db/schema";
 import { adAccounts, adSets, ads, campaigns, insights, syncRuns } from "@/lib/db/schema";
 import { fetchFacebook, listFacebookAccounts, normalizeAccountId } from "@/lib/windsor/client";
 
@@ -57,6 +60,13 @@ const META_FIELDS = [
   "effective_status",
   "thumbnail_url",
 ];
+
+/**
+ * Statuses and creative links are fetched over at least this many days, so ads
+ * that stopped delivering before the sync window still get current statuses and
+ * fresh Meta CDN links (which expire after a few days).
+ */
+const META_LOOKBACK_DAYS = 120;
 
 const num = (v: unknown) => {
   const n = typeof v === "number" ? v : Number(v);
@@ -150,10 +160,11 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
     facts.set(key, f);
   }
 
-  // Statuses / objectives / thumbnails. Optional: a failure here only warns.
+  // Statuses / objectives / thumbnails / creative assets. Optional: a failure here only warns.
+  const metaFrom = from < addDays(to, -(META_LOOKBACK_DAYS - 1)) ? from : addDays(to, -(META_LOOKBACK_DAYS - 1));
   const meta = new Map<string, Record<string, unknown>>();
   try {
-    const metaRows = await fetchFacebook({ fields: META_FIELDS, from, to, accounts: [accountId] });
+    const metaRows = await fetchFacebook({ fields: META_FIELDS, from: metaFrom, to, accounts: [accountId] });
     for (const m of metaRows) {
       const adId = str(m.ad_id);
       if (adId) meta.set(adId, m);
@@ -161,10 +172,17 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
       if (cid && !meta.has(`c:${cid}`)) meta.set(`c:${cid}`, m);
       const sid = str(m.adset_id);
       if (sid && !meta.has(`s:${sid}`)) meta.set(`s:${sid}`, m);
+      // Ads that only delivered before the sync window: refresh their status and links too.
+      if (adId && cid && sid && !adMap.has(adId)) {
+        camps.set(cid, camps.get(cid) ?? { id: cid, name: str(m.campaign) ?? cid });
+        sets.set(sid, sets.get(sid) ?? { id: sid, name: str(m.adset_name) ?? sid, campaignId: cid });
+        adMap.set(adId, { id: adId, name: str(m.ad_name) ?? adId, adSetId: sid, campaignId: cid });
+      }
     }
   } catch (e) {
     warnings.push(`Metadata for account ${accountId}: ${(e as Error).message}`);
   }
+  const creatives = await fetchCreatives(accountId, metaFrom, to, warnings);
 
   const campaignRows = [...camps.values()].map((c) => {
     const m = meta.get(`c:${c.id}`);
@@ -186,7 +204,7 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
   }));
   const adRows = [...adMap.values()].map((a) => {
     const m = meta.get(a.id);
-    return { ...a, accountId, status: str(m?.effective_status), thumbnailUrl: str(m?.thumbnail_url) };
+    return { ...a, accountId, status: str(m?.effective_status), thumbnailUrl: str(m?.thumbnail_url), creative: creatives.get(a.id) ?? null };
   });
   const factRows = [...facts.values()];
 
@@ -231,6 +249,7 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
             campaignId: sql`excluded.campaign_id`,
             status: sql`coalesce(excluded.status, ${ads.status})`,
             thumbnailUrl: sql`coalesce(excluded.thumbnail_url, ${ads.thumbnailUrl})`,
+            creative: sql`coalesce(excluded.creative, ${ads.creative})`,
           },
         });
     }
@@ -241,6 +260,37 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
   });
 
   return facts.size;
+}
+
+/**
+ * Creative asset fields per ad. Asked for in one request; if Windsor rejects it
+ * (one unsupported field fails the lot), retried field group by field group.
+ */
+async function fetchCreatives(accountId: string, from: string, to: string, warnings: string[]) {
+  const out = new Map<string, CreativeFields>();
+  const merge = (rows: Record<string, unknown>[], fields: readonly string[]) => {
+    for (const r of rows) {
+      const adId = str(r.ad_id);
+      if (!adId) continue;
+      const c = out.get(adId) ?? {};
+      for (const f of fields) c[f] = str(r[f]) ?? c[f] ?? null;
+      out.set(adId, c);
+    }
+  };
+  try {
+    merge(await fetchFacebook({ fields: ["ad_id", ...CREATIVE_FIELDS], from, to, accounts: [accountId] }), CREATIVE_FIELDS);
+  } catch {
+    const failed: string[] = [];
+    for (const group of CREATIVE_FIELD_GROUPS) {
+      try {
+        merge(await fetchFacebook({ fields: ["ad_id", ...group], from, to, accounts: [accountId] }), group);
+      } catch (e) {
+        failed.push(`${group.join(", ")}: ${(e as Error).message}`);
+      }
+    }
+    if (failed.length) warnings.push(`Creative assets for account ${accountId}: ${failed.join(" | ")}`);
+  }
+  return out;
 }
 
 export function chunks<T>(arr: T[], size = 500): T[][] {
