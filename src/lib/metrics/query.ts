@@ -15,6 +15,8 @@ export type Scope = {
   campaignMode: Client["campaignMode"];
   campaignIds: string[];
   nameFilter: string | null;
+  /** Extra allow-list (a campaign group, or a person's permitted groups). null = no extra limit. */
+  restrictTo: string[] | null;
 };
 
 export async function loadScope(client: Pick<Client, "id" | "campaignMode" | "campaignNameFilter">): Promise<Scope> {
@@ -28,7 +30,14 @@ export async function loadScope(client: Pick<Client, "id" | "campaignMode" | "ca
     campaignMode: client.campaignMode,
     campaignIds: camps.map((c) => c.id),
     nameFilter: client.campaignNameFilter?.trim() || null,
+    restrictTo: null,
   };
+}
+
+/** Narrows a scope to the given campaigns (intersecting any existing restriction). */
+export function narrowScope(scope: Scope, campaignIds: string[]): Scope {
+  const allowed = scope.restrictTo ? scope.restrictTo.filter((id) => campaignIds.includes(id)) : [...new Set(campaignIds)];
+  return { ...scope, restrictTo: allowed };
 }
 
 function scopeWhere(scope: Scope): SQL {
@@ -39,6 +48,10 @@ function scopeWhere(scope: Scope): SQL {
     parts.push(inArray(insights.campaignId, scope.campaignIds));
   } else if (scope.campaignMode === "exclude" && scope.campaignIds.length > 0) {
     parts.push(notInArray(insights.campaignId, scope.campaignIds));
+  }
+  if (scope.restrictTo) {
+    if (scope.restrictTo.length === 0) return sql`false`;
+    parts.push(inArray(insights.campaignId, scope.restrictTo));
   }
   if (scope.nameFilter) {
     parts.push(

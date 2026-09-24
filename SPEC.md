@@ -53,6 +53,24 @@ Each client has:
 | **Ad accounts** | One or more Meta ad accounts (several clients can share one). |
 | **Campaign visibility** | All campaigns · Only selected · All except selected · plus optional "name contains" filter (e.g. `[NEON MESA]`). |
 | **Profile** | Name, URL slug (`/c/<slug>`), logo URL, "note from your Thinkswell team". |
+| **Campaign groups** | Named bundles of campaigns (e.g. "Halloween Bash 2026") shown as tabs on the Overview and as sections on the Campaigns page. Each group can have its own goal. |
+| **Campaign settings** | Per campaign: a client-friendly name, a group, and an optional goal override. |
+| **Per-person access** | Each login sees either all campaigns, or only chosen groups. |
+
+### Campaign groups, names and goals
+
+- **Groups** are ordered, renamable and deletable (deleting one ungroups its campaigns). The dashboard shows "All campaigns" plus one tab per group; `?group=<id>` filters every card, chart, day card, table and the platform split to that group.
+- **Goal resolution:** campaign override → its group's goal → the client's goal. A group or campaign measured on a different goal gets that goal's preset KPI cards; one on the client's own goal keeps the client's custom cards.
+- **Mixed goals:** when a view contains campaigns with different goals, tables switch to a **Results** column with a unit on each row ("1,242 leads", "25,160 ThruPlays") and cost per result ("$5.11 / lead").
+- **Friendly names** replace Ads Manager names everywhere clients see them. Admins previewing a campaign also see the Ads Manager name.
+- **Agency fee on a group tab** shows only the %-of-spend part for that group's spend. A monthly retainer only shows on the All campaigns view.
+
+### Per-person access
+
+- `client_members.restricted = false` → the person sees everything the client can see.
+- `restricted = true` → only campaigns in their `member_groups`. With none, they see a "nothing shared yet" message. Deleting a group removes it from people's access and never widens it.
+- Enforced in `lib/client-context.ts` by narrowing the same `scopeWhere()` scope, so the Overview, Campaigns, campaign pages and hand-edited URLs all respect it (other campaigns return 404).
+- Limited people don't see the agency fee card. If all their groups share one goal, their overview uses it.
 
 ### Goal presets
 
@@ -90,7 +108,7 @@ The goal's "result" drives day cards, campaign tables, ad cards and highlights.
 ## 6. Admin console
 
 - **Clients** (`/admin`): a card per client with 7-day spend, result, cost, fee and sparkline, plus "Open dashboard" and "Setup" buttons. Notices for demo mode and for unassigned ad accounts.
-- **Client setup** (`/admin/clients/<id>`): Profile · Dashboard setup · Agency fee · Data access · People · Archive.
+- **Client setup** (`/admin/clients/<id>`): Profile · Dashboard setup · Agency fee · Data access · **Campaigns & groups** (groups editor + per-campaign name/group/goal) · People (invite, per-person access) · Archive.
 - **Team** (`/admin/team`): Thinkswell admins (invite, access link, disable) and every client login with the dashboards it can see.
 - **Data** (`/admin/data`): Windsor status, sync buttons (7d / 30d / 90d backfill), "Test connection", ad accounts with owner client and 30-day spend, and the sync log.
 
@@ -134,7 +152,10 @@ users(id, email, name, password_hash, role, status, session_version, failed_logi
 auth_tokens(id, user_id, token_hash, purpose[invite|reset], expires_at, used_at)
 clients(id, name, slug, logo_url, welcome_note, goal, kpis[], fee_type, fee_percent, fee_flat_monthly,
         fee_label, campaign_mode, campaign_name_filter, archived_at)
-client_members(client_id, user_id)            -- who can see which dashboard
+client_members(client_id, user_id, restricted) -- who can see which dashboard
+campaign_groups(id, client_id, name, goal, sort_order)
+campaign_settings(client_id, campaign_id, display_name, group_id, goal)
+member_groups(client_id, user_id, group_id)   -- groups a restricted member may see
 client_accounts(client_id, account_id)        -- which ad accounts feed it
 client_campaigns(client_id, campaign_id)      -- include/exclude list
 ad_accounts(id, name, currency, source, last_synced_at)

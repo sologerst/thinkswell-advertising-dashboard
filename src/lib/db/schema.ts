@@ -1,5 +1,6 @@
 import { relations, sql } from "drizzle-orm";
 import {
+  boolean,
   date,
   doublePrecision,
   index,
@@ -91,6 +92,9 @@ export const clientMembers = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    // When true, this person only sees campaigns in their member_groups rows
+    // (none = nothing). When false they see everything the client can see.
+    restricted: boolean("restricted").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.clientId, t.userId] }), index("client_members_user_idx").on(t.userId)],
@@ -117,6 +121,58 @@ export const clientCampaigns = pgTable(
     campaignId: text("campaign_id").notNull(),
   },
   (t) => [primaryKey({ columns: [t.clientId, t.campaignId] })],
+);
+
+/**
+ * Named bundles of campaigns inside a client (e.g. "Halloween Bash 2026"),
+ * shown as tabs on the dashboard. A group can measure a different goal than
+ * the client's default.
+ */
+export const campaignGroups = pgTable(
+  "campaign_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    goal: text("goal").$type<GoalType>(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("campaign_groups_client_idx").on(t.clientId)],
+);
+
+/** Per-client overrides for a campaign: friendly name, group and goal. */
+export const campaignSettings = pgTable(
+  "campaign_settings",
+  {
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    campaignId: text("campaign_id").notNull(),
+    displayName: text("display_name"),
+    groupId: uuid("group_id").references(() => campaignGroups.id, { onDelete: "set null" }),
+    goal: text("goal").$type<GoalType>(),
+  },
+  (t) => [primaryKey({ columns: [t.clientId, t.campaignId] })],
+);
+
+/** Groups a restricted member may see (see client_members.restricted). */
+export const memberGroups = pgTable(
+  "member_groups",
+  {
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => campaignGroups.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.groupId] }), index("member_groups_client_user_idx").on(t.clientId, t.userId)],
 );
 
 /* ------------------------------------------------------------------ */
@@ -254,3 +310,5 @@ export const clientCampaignsRelations = relations(clientCampaigns, ({ one }) => 
 export type User = typeof users.$inferSelect;
 export type Client = typeof clients.$inferSelect;
 export type Campaign = typeof campaigns.$inferSelect;
+export type CampaignGroup = typeof campaignGroups.$inferSelect;
+export type CampaignSetting = typeof campaignSettings.$inferSelect;

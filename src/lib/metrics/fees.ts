@@ -34,3 +34,12 @@ export function describeFee(c: FeeConfig): string {
   };
   return map[c.feeType];
 }
+
+/**
+ * Fee shown on a single campaign-group tab: only the %-of-spend part applies to
+ * a slice of campaigns; a monthly retainer stays on the whole-client view.
+ */
+export function groupFeeConfig(c: FeeConfig): FeeConfig | null {
+  if (c.feeType === "percent" || c.feeType === "percent_plus_flat") return { ...c, feeType: "percent" };
+  return null;
+}

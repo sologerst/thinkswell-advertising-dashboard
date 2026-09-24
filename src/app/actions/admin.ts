@@ -1,13 +1,13 @@
 "use server";
 
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/current";
 import { issueToken, tokenLink } from "@/lib/auth/tokens";
 import { getDb } from "@/lib/db";
-import { clientAccounts, clientCampaigns, clientMembers, clients, users } from "@/lib/db/schema";
+import { campaignGroups, campaignSettings, clientAccounts, clientCampaigns, clientMembers, clients, memberGroups, users } from "@/lib/db/schema";
 import { addDays, todayISO } from "@/lib/dates";
 import { sendAccessEmail } from "@/lib/email";
 import { GOAL_PRESETS, METRIC_MAP } from "@/lib/metrics/catalog";
@@ -212,6 +212,8 @@ export async function inviteClientUser(_: ActionState, formData: FormData): Prom
   const person = PersonSchema.safeParse({ name: formData.get("name"), email: formData.get("email") });
   if (!clientId.success) return { error: "Unknown client." };
   if (!person.success) return { error: firstError(person.error) };
+  const groupIds = formData.getAll("groups").map(String).filter(Boolean);
+  if (formData.get("access") === "groups" && groupIds.length === 0) return { error: "Tick at least one group, or choose “All campaigns”." };
   const db = await getDb();
   const [client] = await db.select().from(clients).where(eq(clients.id, clientId.data));
   if (!client) return { error: "Unknown client." };
@@ -221,7 +223,12 @@ export async function inviteClientUser(_: ActionState, formData: FormData): Prom
   if (!user) {
     [user] = await db.insert(users).values({ name: person.data.name, email: person.data.email, role: "client", status: "invited" }).returning();
   }
-  await db.insert(clientMembers).values({ clientId: client.id, userId: user!.id }).onConflictDoNothing();
+  const added = await db.insert(clientMembers).values({ clientId: client.id, userId: user!.id }).onConflictDoNothing().returning();
+  // New members get the access picked on the form; existing members only change if groups were ticked.
+  if (added.length || groupIds.length) {
+    const err = await applyMemberAccess(client.id, user!.id, groupIds.length ? groupIds : null);
+    if (err) return { error: err };
+  }
 
   // Existing active users just gain access; new ones need a link to set a password.
   if (user!.status === "active" && user!.passwordHash) {
@@ -286,8 +293,143 @@ export async function removeMember(formData: FormData) {
   const userId = z.uuid().parse(formData.get("userId"));
   const clientId = z.uuid().parse(formData.get("clientId"));
   const db = await getDb();
+  await db.delete(memberGroups).where(and(eq(memberGroups.userId, userId), eq(memberGroups.clientId, clientId)));
   await db.delete(clientMembers).where(and(eq(clientMembers.userId, userId), eq(clientMembers.clientId, clientId)));
   revalidatePath(`/admin/clients/${clientId}`);
+}
+
+/* ------------------------------------------------------------------ */
+/* Campaign groups, friendly names, per-campaign goals, member access  */
+/* ------------------------------------------------------------------ */
+
+const optionalGoal = z.union([goalEnum, z.literal(""), z.null()]).transform((g) => (g ? g : null));
+
+/** Replaces a client's group list (create, rename, re-goal, reorder, delete). */
+export async function saveGroups(_: ActionState, formData: FormData): Promise<ActionState> {
+  await requireAdmin();
+  const clientId = z.uuid().safeParse(formData.get("clientId"));
+  if (!clientId.success) return { error: "Unknown client." };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(formData.get("groups") ?? "[]"));
+  } catch {
+    return { error: "Couldn't read the group list." };
+  }
+  const parsed = z
+    .array(z.object({ id: z.uuid().optional(), name: z.string().trim().min(1, { error: "Every group needs a name." }).max(60), goal: optionalGoal }))
+    .max(30, { error: "Up to 30 groups per client." })
+    .safeParse(raw);
+  if (!parsed.success) return { error: firstError(parsed.error) };
+  const names = parsed.data.map((g) => g.name.toLowerCase());
+  if (new Set(names).size !== names.length) return { error: "Two groups have the same name." };
+
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const existing = await tx.select({ id: campaignGroups.id }).from(campaignGroups).where(eq(campaignGroups.clientId, clientId.data));
+    const existingIds = new Set(existing.map((g) => g.id));
+    const keep = parsed.data.filter((g) => g.id && existingIds.has(g.id)).map((g) => g.id!);
+    // Deleting a group ungroups its campaigns (FK set null) and drops it from people's access.
+    await tx
+      .delete(campaignGroups)
+      .where(and(eq(campaignGroups.clientId, clientId.data), keep.length ? notInArray(campaignGroups.id, keep) : undefined));
+    for (const [i, g] of parsed.data.entries()) {
+      if (g.id && existingIds.has(g.id)) {
+        await tx.update(campaignGroups).set({ name: g.name, goal: g.goal, sortOrder: i }).where(eq(campaignGroups.id, g.id));
+      } else {
+        await tx.insert(campaignGroups).values({ clientId: clientId.data, name: g.name, goal: g.goal, sortOrder: i });
+      }
+    }
+  });
+  revalidatePath("/admin", "layout");
+  revalidatePath("/c/[slug]", "layout");
+  return { ok: "Groups saved." };
+}
+
+/** Saves friendly names, group assignments and goal overrides for a client's campaigns. */
+export async function saveCampaignSettings(_: ActionState, formData: FormData): Promise<ActionState> {
+  await requireAdmin();
+  const clientId = z.uuid().safeParse(formData.get("clientId"));
+  if (!clientId.success) return { error: "Unknown client." };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(formData.get("settings") ?? "[]"));
+  } catch {
+    return { error: "Couldn't read the campaign list." };
+  }
+  const parsed = z
+    .array(
+      z.object({
+        campaignId: z.string().trim().min(1).max(64),
+        displayName: z.string().trim().max(120),
+        groupId: z.union([z.uuid(), z.literal(""), z.null()]).transform((g) => (g ? g : null)),
+        goal: optionalGoal,
+      }),
+    )
+    .max(2000)
+    .safeParse(raw);
+  if (!parsed.success) return { error: firstError(parsed.error) };
+
+  const db = await getDb();
+  const groups = await db.select({ id: campaignGroups.id }).from(campaignGroups).where(eq(campaignGroups.clientId, clientId.data));
+  const valid = new Set(groups.map((g) => g.id));
+  if (parsed.data.some((r) => r.groupId && !valid.has(r.groupId))) return { error: "One of the groups no longer exists. Reload and try again." };
+
+  await db.transaction(async (tx) => {
+    for (const r of parsed.data) {
+      const empty = !r.displayName && !r.groupId && !r.goal;
+      if (empty) {
+        await tx.delete(campaignSettings).where(and(eq(campaignSettings.clientId, clientId.data), eq(campaignSettings.campaignId, r.campaignId)));
+        continue;
+      }
+      await tx
+        .insert(campaignSettings)
+        .values({ clientId: clientId.data, campaignId: r.campaignId, displayName: r.displayName || null, groupId: r.groupId, goal: r.goal })
+        .onConflictDoUpdate({
+          target: [campaignSettings.clientId, campaignSettings.campaignId],
+          set: { displayName: r.displayName || null, groupId: r.groupId, goal: r.goal },
+        });
+    }
+  });
+  revalidatePath("/admin", "layout");
+  revalidatePath("/c/[slug]", "layout");
+  return { ok: "Campaign settings saved." };
+}
+
+/** null = sees every campaign the client can see; [] or ids = only those groups. */
+async function applyMemberAccess(clientId: string, userId: string, groupIds: string[] | null): Promise<string | null> {
+  const db = await getDb();
+  if (groupIds?.length) {
+    const found = await db
+      .select({ id: campaignGroups.id })
+      .from(campaignGroups)
+      .where(and(eq(campaignGroups.clientId, clientId), inArray(campaignGroups.id, groupIds)));
+    if (found.length !== new Set(groupIds).size) return "One of the groups no longer exists. Reload and try again.";
+  }
+  await db.transaction(async (tx) => {
+    await tx
+      .update(clientMembers)
+      .set({ restricted: groupIds !== null })
+      .where(and(eq(clientMembers.clientId, clientId), eq(clientMembers.userId, userId)));
+    await tx.delete(memberGroups).where(and(eq(memberGroups.clientId, clientId), eq(memberGroups.userId, userId)));
+    if (groupIds?.length) {
+      await tx.insert(memberGroups).values([...new Set(groupIds)].map((groupId) => ({ clientId, userId, groupId })));
+    }
+  });
+  return null;
+}
+
+export async function setMemberAccess(_: ActionState, formData: FormData): Promise<ActionState> {
+  await requireAdmin();
+  const clientId = z.uuid().safeParse(formData.get("clientId"));
+  const userId = z.uuid().safeParse(formData.get("userId"));
+  if (!clientId.success || !userId.success) return { error: "Unknown person." };
+  const mode = formData.get("access");
+  const groupIds = formData.getAll("groups").map(String).filter(Boolean);
+  if (mode === "groups" && groupIds.length === 0) return { error: "Tick at least one group, or choose “All campaigns”." };
+  const err = await applyMemberAccess(clientId.data, userId.data, mode === "groups" ? groupIds : null);
+  if (err) return { error: err };
+  revalidatePath(`/admin/clients/${clientId.data}`);
+  return { ok: mode === "groups" ? "Access limited to the selected groups." : "Access set to all campaigns." };
 }
 
 /* ------------------------------------------------------------------ */

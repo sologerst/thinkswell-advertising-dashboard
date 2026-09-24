@@ -1,12 +1,12 @@
 import "server-only";
 import { inArray, max } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { adAccounts, type Client } from "@/lib/db/schema";
+import { adAccounts, type GoalType } from "@/lib/db/schema";
 import type { DateRange, ISODate } from "@/lib/dates";
 import { pctChange } from "@/lib/format";
 import { GOAL_PRESETS, getMetric, type MetricDef, type Totals } from "./catalog";
-import { feeForDay, feeForDays, hasFee } from "./fees";
-import { getByCampaign, getByPlatform, getCampaignDaily, getDaily, sumRows, type DailyRow, type Filters, type Scope } from "./query";
+import { feeForDay, feeForDays, hasFee, type FeeConfig } from "./fees";
+import { getByCampaign, getByPlatform, getCampaignDaily, getDaily, sumRows, type CampaignRow, type DailyRow, type Filters, type Scope } from "./query";
 
 export type KpiValue = {
   key: string;
@@ -40,9 +40,9 @@ export function kpiFor(def: MetricDef, cur: Totals, prev: Totals, daily: DailyRo
   };
 }
 
-/** KPI keys to show for a client: its saved list, or its goal preset. */
-export function clientKpis(client: Pick<Client, "kpis" | "goal">): MetricDef[] {
-  const keys = client.kpis?.length ? client.kpis : GOAL_PRESETS[client.goal].kpis;
+/** KPI cards for a view: its saved list, or its goal preset. Spend is always shown separately. */
+export function clientKpis(setup: { kpis: string[]; goal: GoalType }): MetricDef[] {
+  const keys = setup.kpis?.length ? setup.kpis : GOAL_PRESETS[setup.goal].kpis;
   return keys.map((k) => getMetric(k)).filter((m): m is MetricDef => Boolean(m) && m!.key !== "spend");
 }
 
@@ -55,21 +55,74 @@ export async function lastSyncedAt(scope: Scope): Promise<Date | null> {
 
 export type Highlight = { icon: string; title: string; body: string; href?: string };
 
-export async function buildOverview(client: Client, scope: Scope, range: DateRange, platform: string | null) {
-  const preset = GOAL_PRESETS[client.goal];
+/** How campaign rows get their friendly name and goal (see lib/client-context.ts). */
+export type CampaignLabels = {
+  nameFor: (campaignId: string, fallback: string) => string;
+  goalFor: (campaignId: string) => GoalType;
+  groupFor?: (campaignId: string) => { id: string; name: string } | null;
+};
+
+export type CampaignView = CampaignRow & {
+  originalName: string;
+  goal: GoalType;
+  groupId: string | null;
+  result: number | null;
+  cost: number | null;
+  resultUnit: string;
+  costUnit: string;
+  spark: number[];
+};
+
+/**
+ * Campaign rows with display names, their own goal's result and cost, and a
+ * result-trend sparkline, so tables can mix ticket, lead and video campaigns.
+ */
+export async function campaignViews(scope: Scope, f: Filters, labels: CampaignLabels): Promise<CampaignView[]> {
+  const rows = await getByCampaign(scope, f);
+  const goals = new Map(rows.map((r) => [r.id, labels.goalFor(r.id)]));
+  const fields = [...new Set([...goals.values()].map((g) => resultFieldFor(GOAL_PRESETS[g].result)))];
+  const sparksByField = new Map(await Promise.all(fields.map(async (field) => [field, await getCampaignDaily(scope, f, field)] as const)));
+  return rows.map((r) => {
+    const goal = goals.get(r.id)!;
+    const preset = GOAL_PRESETS[goal];
+    const field = resultFieldFor(preset.result);
+    return {
+      ...r,
+      originalName: r.name,
+      name: labels.nameFor(r.id, r.name),
+      goal,
+      groupId: labels.groupFor?.(r.id)?.id ?? null,
+      result: getMetric(preset.result)!.compute(r),
+      cost: getMetric(preset.costPerResult)!.compute(r),
+      resultUnit: preset.unit,
+      costUnit: preset.unitOne,
+      spark: sparksByField.get(field)?.get(r.id) ?? [],
+    };
+  });
+}
+
+export async function buildOverview(opts: {
+  slug: string;
+  setup: { goal: GoalType; kpis: string[] };
+  fee: FeeConfig | null;
+  scope: Scope;
+  range: DateRange;
+  platform: string | null;
+  labels: CampaignLabels;
+}) {
+  const { setup, scope, range, platform } = opts;
+  const preset = GOAL_PRESETS[setup.goal];
   const f: Filters = { from: range.from, to: range.to, platform };
   const pf: Filters = { from: range.prevFrom, to: range.prevTo, platform };
 
   const resultMetric = getMetric(preset.result)!;
   const costMetric = getMetric(preset.costPerResult)!;
-  const resultField = resultFieldFor(preset.result);
 
-  const [daily, prevDaily, campaigns, platforms, campaignSparks, synced] = await Promise.all([
+  const [daily, prevDaily, campaigns, platforms, synced] = await Promise.all([
     getDaily(scope, f),
     getDaily(scope, pf),
-    getByCampaign(scope, f),
+    campaignViews(scope, f, opts.labels),
     getByPlatform(scope, { from: range.from, to: range.to }),
-    getCampaignDaily(scope, f, resultField),
     lastSyncedAt(scope),
   ]);
 
@@ -77,25 +130,27 @@ export async function buildOverview(client: Client, scope: Scope, range: DateRan
   const prev = sumRows(prevDaily);
 
   const spend = kpiFor(getMetric("spend")!, cur, prev, daily);
-  const kpis = clientKpis(client).map((m) => kpiFor(m, cur, prev, daily));
+  const kpis = clientKpis(setup).map((m) => kpiFor(m, cur, prev, daily));
 
-  let fee: null | { value: number; prev: number; delta: number | null; spark: number[]; total: number } = null;
-  if (hasFee(client)) {
-    const value = feeForDays(client, daily);
-    const p = feeForDays(client, prevDaily);
+  let fee: null | { value: number; prev: number; delta: number | null; spark: number[]; total: number; config: FeeConfig } = null;
+  if (opts.fee && hasFee(opts.fee)) {
+    const cfg = opts.fee;
+    const value = feeForDays(cfg, daily);
+    const p = feeForDays(cfg, prevDaily);
     fee = {
       value,
       prev: p,
       delta: pctChange(value, p),
-      spark: daily.map((d) => feeForDay(client, d.date, d.spend)),
+      spark: daily.map((d) => feeForDay(cfg, d.date, d.spend)),
       total: value + cur.spend,
+      config: cfg,
     };
   }
 
   // Previous-period values aligned by position, for the trend chart's ghost line.
   const series = daily.map((d, i) => ({ date: d.date, cur: d, prev: prevDaily[i] ?? null }));
 
-  const highlights = buildHighlights({ daily, campaigns, platforms, resultMetric, costMetric, slug: client.slug });
+  const highlights = buildHighlights({ daily, campaigns, platforms, resultMetric, costMetric, slug: opts.slug });
 
   return {
     preset,
@@ -108,7 +163,8 @@ export async function buildOverview(client: Client, scope: Scope, range: DateRan
     kpis,
     daily,
     series,
-    campaigns: campaigns.map((c) => ({ ...c, spark: campaignSparks.get(c.id) ?? [] })),
+    campaigns,
+    mixedGoals: new Set(campaigns.map((c) => c.goal)).size > 1,
     platforms,
     highlights,
     synced,
@@ -152,7 +208,8 @@ function buildHighlights(args: {
 
   const totalResults = campaigns.reduce((s, c) => s + (resultMetric.compute(c) ?? 0), 0);
   const top = [...campaigns].sort((a, b) => (resultMetric.compute(b) ?? 0) - (resultMetric.compute(a) ?? 0))[0];
-  if (top && totalResults > 0) {
+  const withResult = campaigns.filter((c) => (resultMetric.compute(c) ?? 0) > 0).length;
+  if (top && totalResults > 0 && withResult > 1) {
     const share = (resultMetric.compute(top) ?? 0) / totalResults;
     out.push({
       icon: "flame",

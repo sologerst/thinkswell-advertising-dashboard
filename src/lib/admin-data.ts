@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { adAccounts, clientAccounts, clientMembers, clients, insights, syncRuns, users } from "@/lib/db/schema";
+import { adAccounts, campaignGroups, campaignSettings, clientAccounts, clientMembers, clients, insights, memberGroups, syncRuns, users } from "@/lib/db/schema";
 import { addDays, todayISO } from "@/lib/dates";
 import { GOAL_PRESETS, getMetric } from "@/lib/metrics/catalog";
 import { feeForDays, hasFee } from "@/lib/metrics/fees";
@@ -76,7 +76,15 @@ export async function recentSyncRuns(limit = 12) {
 export async function membersOf(clientId: string) {
   const db = await getDb();
   return db
-    .select({ id: users.id, name: users.name, email: users.email, status: users.status, lastLoginAt: users.lastLoginAt, hasPassword: sql<boolean>`${users.passwordHash} is not null` })
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      status: users.status,
+      lastLoginAt: users.lastLoginAt,
+      hasPassword: sql<boolean>`${users.passwordHash} is not null`,
+      restricted: clientMembers.restricted,
+    })
     .from(clientMembers)
     .innerJoin(users, eq(users.id, clientMembers.userId))
     .where(eq(clientMembers.clientId, clientId))
@@ -110,3 +118,16 @@ export async function clientLogins() {
   return [...byUser.values()];
 }
 
+
+/** Groups, per-campaign settings and who-can-see-which-group for a client's setup page. */
+export async function groupSetup(clientId: string) {
+  const db = await getDb();
+  const [groups, settings, access] = await Promise.all([
+    db.select().from(campaignGroups).where(eq(campaignGroups.clientId, clientId)).orderBy(asc(campaignGroups.sortOrder), asc(campaignGroups.name)),
+    db.select().from(campaignSettings).where(eq(campaignSettings.clientId, clientId)),
+    db.select().from(memberGroups).where(eq(memberGroups.clientId, clientId)),
+  ]);
+  const accessByUser = new Map<string, string[]>();
+  for (const a of access) accessByUser.set(a.userId, [...(accessByUser.get(a.userId) ?? []), a.groupId]);
+  return { groups, settings: new Map(settings.map((s) => [s.campaignId, s])), accessByUser };
+}

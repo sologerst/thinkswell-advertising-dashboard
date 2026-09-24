@@ -1,9 +1,9 @@
 "use client";
 
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, ChevronRight, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Layers, Search } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Sparkline } from "@/components/charts/sparkline";
 import { StatusPill } from "@/components/ui";
 import { formatMetric, titleCase } from "@/lib/format";
@@ -17,13 +17,18 @@ export type CampaignTableRow = {
   spend: number;
   result: number | null;
   cost: number | null;
+  /** e.g. "purchases" / "purchase": shown per row when goals are mixed. */
+  resultUnit?: string;
+  costUnit?: string;
   ctr: number | null;
   secondary: number | null;
   spark: number[];
   href: string;
+  groupId?: string | null;
 };
 
-type Col = { key: "spend" | "result" | "cost" | "ctr" | "secondary"; label: string; format: MetricFormat; lowerIsBetter?: boolean; hideOnMobile?: boolean };
+type SortKey = "spend" | "result" | "cost" | "ctr" | "secondary";
+type Col = { key: SortKey; label: string; format: MetricFormat; hideOnMobile?: boolean };
 
 export function CampaignTable({
   rows,
@@ -32,6 +37,8 @@ export function CampaignTable({
   costLabel,
   secondaryLabel,
   secondaryFormat,
+  mixed = false,
+  groups,
   searchable = false,
   limit,
   emptyText = "No campaigns delivered in this period.",
@@ -42,18 +49,22 @@ export function CampaignTable({
   costLabel: string;
   secondaryLabel?: string;
   secondaryFormat?: MetricFormat;
+  /** Campaigns measure different goals: show "Results" with a unit on each row. */
+  mixed?: boolean;
+  /** When given, rows are shown in sections per group (ungrouped last). */
+  groups?: { id: string; name: string }[];
   searchable?: boolean;
   limit?: number;
   emptyText?: string;
 }) {
-  const [sort, setSort] = useState<{ key: Col["key"]; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"all" | "active">("all");
 
   const cols: Col[] = [
     { key: "spend", label: "Spend", format: "currency" },
-    { key: "result", label: resultLabel, format: resultFormat },
-    { key: "cost", label: costLabel, format: "currency", lowerIsBetter: true },
+    { key: "result", label: mixed ? "Results" : resultLabel, format: resultFormat },
+    { key: "cost", label: mixed ? "Cost / result" : costLabel, format: "currency" },
     { key: "ctr", label: "CTR", format: "percent", hideOnMobile: true },
     ...(secondaryLabel ? [{ key: "secondary" as const, label: secondaryLabel, format: secondaryFormat ?? "number", hideOnMobile: true }] : []),
   ];
@@ -74,10 +85,19 @@ export function CampaignTable({
     return limit ? list.slice(0, limit) : list;
   }, [rows, q, status, sort, limit]);
 
+  const sections = useMemo(() => {
+    if (!groups?.length) return [{ id: "_all", name: null as string | null, rows: sorted }];
+    const known = new Set(groups.map((g) => g.id));
+    const out = groups.map((g) => ({ id: g.id, name: g.name as string | null, rows: sorted.filter((r) => r.groupId === g.id) }));
+    out.push({ id: "_other", name: "Other campaigns", rows: sorted.filter((r) => !r.groupId || !known.has(r.groupId)) });
+    return out.filter((s) => s.rows.length > 0);
+  }, [groups, sorted]);
+
   const bestCost = useMemo(() => {
+    if (mixed) return null;
     const costs = rows.map((r) => r.cost).filter((c): c is number => c !== null && c > 0);
     return costs.length > 1 ? Math.min(...costs) : null;
-  }, [rows]);
+  }, [rows, mixed]);
 
   return (
     <div>
@@ -124,34 +144,52 @@ export function CampaignTable({
             </tr>
           </thead>
           <tbody>
-            {sorted.map((r) => (
-              <tr key={r.id} className="group relative">
-                <td className="border-t border-line py-3.5 pr-4 pl-2">
-                  <Link href={r.href} className="block after:absolute after:inset-0 after:content-['']">
-                    <div className="max-w-[340px] truncate font-semibold text-fg transition group-hover:text-cyan">{r.name}</div>
-                  </Link>
-                  <div className="mt-1 flex items-center gap-2">
-                    <StatusPill status={r.status} />
-                    {r.objective && <span className="text-[0.7rem] text-fg-3">{titleCase(r.objective.replace(/^OUTCOME_/, ""))}</span>}
-                  </div>
-                </td>
-                {cols.map((c) => (
-                  <td key={c.key} className={clsx("num border-t border-line py-3.5 text-right text-fg-2", c.hideOnMobile && "hidden md:table-cell")}>
-                    <span className={clsx(c.key === "result" && "font-semibold text-fg")}>{formatMetric(r[c.key], c.format)}</span>
-                    {c.key === "cost" && bestCost !== null && r.cost === bestCost && (
-                      <span className="ml-1.5 rounded-full bg-good/12 px-1.5 py-0.5 text-[0.6rem] font-bold text-good">BEST</span>
-                    )}
-                  </td>
+            {sections.map((section) => (
+              <Fragment key={section.id}>
+                {section.name && (
+                  <tr>
+                    <td colSpan={cols.length + 3} className="border-t border-line pt-5 pb-2 pl-2">
+                      <span className="inline-flex items-center gap-2 text-xs font-bold tracking-wider text-gold uppercase">
+                        <Layers className="size-3.5" /> {section.name}
+                        <span className="font-semibold text-fg-3 normal-case tracking-normal">
+                          · {section.rows.length} campaign{section.rows.length === 1 ? "" : "s"} · {formatMetric(section.rows.reduce((s, r) => s + r.spend, 0), "currency")}
+                        </span>
+                      </span>
+                    </td>
+                  </tr>
+                )}
+                {section.rows.map((r) => (
+                  <tr key={r.id} className="group relative">
+                    <td className="border-t border-line py-3.5 pr-4 pl-2">
+                      <Link href={r.href} className="block after:absolute after:inset-0 after:content-['']">
+                        <div className="max-w-[340px] truncate font-semibold text-fg transition group-hover:text-cyan">{r.name}</div>
+                      </Link>
+                      <div className="mt-1 flex items-center gap-2">
+                        <StatusPill status={r.status} />
+                        {r.objective && <span className="text-[0.7rem] text-fg-3">{titleCase(r.objective.replace(/^OUTCOME_/, ""))}</span>}
+                      </div>
+                    </td>
+                    {cols.map((c) => (
+                      <td key={c.key} className={clsx("num border-t border-line py-3.5 text-right text-fg-2", c.hideOnMobile && "hidden md:table-cell")}>
+                        <span className={clsx(c.key === "result" && "font-semibold text-fg")}>{formatMetric(r[c.key], c.format)}</span>
+                        {mixed && c.key === "result" && r.resultUnit && <span className="ml-1 text-[0.7rem] text-fg-3">{r.resultUnit}</span>}
+                        {mixed && c.key === "cost" && r.cost !== null && r.costUnit && <span className="ml-1 text-[0.7rem] text-fg-3">/ {r.costUnit}</span>}
+                        {c.key === "cost" && bestCost !== null && r.cost === bestCost && (
+                          <span className="ml-1.5 rounded-full bg-good/12 px-1.5 py-0.5 text-[0.6rem] font-bold text-good">BEST</span>
+                        )}
+                      </td>
+                    ))}
+                    <td className="hidden border-t border-line py-3.5 pl-4 lg:table-cell">
+                      <div className="flex justify-end">
+                        <Sparkline values={r.spark} color="var(--color-series-2)" width={88} height={26} fill={false} />
+                      </div>
+                    </td>
+                    <td className="border-t border-line py-3.5 pr-2 text-right">
+                      <ChevronRight className="ml-auto size-4 text-fg-3 transition group-hover:translate-x-0.5 group-hover:text-cyan" />
+                    </td>
+                  </tr>
                 ))}
-                <td className="hidden border-t border-line py-3.5 pl-4 lg:table-cell">
-                  <div className="flex justify-end">
-                    <Sparkline values={r.spark} color="var(--color-series-2)" width={88} height={26} fill={false} />
-                  </div>
-                </td>
-                <td className="border-t border-line py-3.5 pr-2 text-right">
-                  <ChevronRight className="ml-auto size-4 text-fg-3 transition group-hover:translate-x-0.5 group-hover:text-cyan" />
-                </td>
-              </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>

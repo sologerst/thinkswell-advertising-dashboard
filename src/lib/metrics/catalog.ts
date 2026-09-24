@@ -338,12 +338,17 @@ export type GoalPreset = {
   /** The "result" a campaign is judged on, for tables and day cards. */
   result: string;
   costPerResult: string;
+  /** Result unit for mixed-goal tables, e.g. "145 purchases", "$12 / purchase". */
+  unit: string;
+  unitOne: string;
   kpis: string[];
 };
 
 export const GOAL_PRESETS: Record<GoalType, GoalPreset> = {
   sales: {
     goal: "sales",
+    unit: "purchases",
+    unitOne: "purchase",
     label: "Ticket sales / E-com",
     tagline: "Tickets, orders and revenue",
     emoji: "🎟️",
@@ -353,6 +358,8 @@ export const GOAL_PRESETS: Record<GoalType, GoalPreset> = {
   },
   leads: {
     goal: "leads",
+    unit: "leads",
+    unitOne: "lead",
     label: "Lead generation",
     tagline: "Inquiries, bookings and sign-ups",
     emoji: "📬",
@@ -362,6 +369,8 @@ export const GOAL_PRESETS: Record<GoalType, GoalPreset> = {
   },
   awareness: {
     goal: "awareness",
+    unit: "ThruPlays",
+    unitOne: "ThruPlay",
     label: "Awareness / Video",
     tagline: "Reach, views and attention",
     emoji: "📣",
@@ -371,6 +380,8 @@ export const GOAL_PRESETS: Record<GoalType, GoalPreset> = {
   },
   traffic: {
     goal: "traffic",
+    unit: "link clicks",
+    unitOne: "click",
     label: "Traffic / Engagement",
     tagline: "Clicks, visits and engagement",
     emoji: "⚡",

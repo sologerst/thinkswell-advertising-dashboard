@@ -9,27 +9,28 @@ import { DashboardHeader } from "@/components/dashboard/page-header";
 import { PlatformSplit } from "@/components/dashboard/platform-split";
 import { MetricIcon } from "@/components/icons";
 import { Card, EmptyState, SectionTitle } from "@/components/ui";
-import { requireClientAccess } from "@/lib/auth/current";
+import { GroupTabs } from "@/components/dashboard/group-tabs";
+import { loadClientContext } from "@/lib/client-context";
 import { addDays, fmtRange } from "@/lib/dates";
 import { formatMetric } from "@/lib/format";
 import { getMetric } from "@/lib/metrics/catalog";
-import { describeFee } from "@/lib/metrics/fees";
-import { loadScope } from "@/lib/metrics/query";
+import { describeFee, groupFeeConfig } from "@/lib/metrics/fees";
 import { buildOverview } from "@/lib/metrics/report";
 import { greeting, keepQuery, readDashboardParams } from "@/lib/params";
 
 export async function generateMetadata({ params }: PageProps<"/c/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const { client } = await requireClientAccess(slug);
+  const { client } = await loadClientContext(slug);
   return { title: client.name };
 }
 
 export default async function OverviewPage({ params, searchParams }: PageProps<"/c/[slug]">) {
   const { slug } = await params;
   const sp = await searchParams;
-  const { user, client, isPreview } = await requireClientAccess(slug);
+  const ctx = await loadClientContext(slug);
+  const { user, client, isPreview } = ctx;
   const { today, range, platform } = readDashboardParams(sp);
-  const scope = await loadScope(client);
+  const { group, scope, setup } = ctx.view(typeof sp.group === "string" ? sp.group : null);
 
   const firstName = user.name.split(" ")[0];
   const header = (
@@ -37,6 +38,12 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
       eyebrow={
         <>
           <span className="text-cyan">{client.name}</span>
+          {group && (
+            <>
+              <span className="text-fg-3/60">•</span>
+              <span className="text-gold">{group.name}</span>
+            </>
+          )}
           <span className="text-fg-3/60">•</span>
           <span>{range.label}</span>
         </>
@@ -53,6 +60,29 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
     />
   );
 
+  const tabs = (
+    <GroupTabs
+      groups={ctx.groups}
+      active={group?.id ?? null}
+      clientGoal={client.goal}
+      hrefFor={(id) => `/c/${slug}${keepQuery(sp, { group: id })}`}
+      allLabel={ctx.restricted ? "Everything shared with you" : "All campaigns"}
+    />
+  );
+
+  if (ctx.restricted && ctx.groups.length === 0) {
+    return (
+      <>
+        {header}
+        <Card>
+          <EmptyState icon={<PlugZap className="size-10" />} title="Nothing shared with you yet">
+            Your Thinkswell team hasn&apos;t shared any campaigns with your login yet. They&apos;ll show up here as soon as they do.
+          </EmptyState>
+        </Card>
+      </>
+    );
+  }
+
   if (scope.accountIds.length === 0) {
     return (
       <>
@@ -66,7 +96,15 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
     );
   }
 
-  const r = await buildOverview(client, scope, range, platform);
+  const r = await buildOverview({
+    slug,
+    setup,
+    fee: !ctx.showFee ? null : group ? groupFeeConfig(client) : client,
+    scope,
+    range,
+    platform,
+    labels: ctx,
+  });
   const compareLabel = `vs prev. ${range.key === "today" || range.key === "yesterday" ? "day" : "period"}`;
   const q = keepQuery(sp);
 
@@ -86,8 +124,9 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
   return (
     <>
       {header}
+      {tabs}
 
-      {client.welcomeNote && (
+      {client.welcomeNote && !group && (
         <div className="tw-card animate-rise mb-6 flex items-start gap-4 border-gold/25! p-4 sm:p-5">
           <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-gold/15 text-gold">
             <Lightbulb className="size-5" />
@@ -125,7 +164,11 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
           <KpiCard
             index={1}
             label={client.feeLabel}
-            help={`Thinkswell's fee for this period: ${describeFee(client)}. Retainers are spread evenly across each day of the month.`}
+            help={
+              group
+                ? `Thinkswell's ${describeFee(r.fee.config)} on this group's spend. Any monthly retainer shows on the All campaigns view.`
+                : `Thinkswell's fee for this period: ${describeFee(client)}. Retainers are spread evenly across each day of the month.`
+            }
             icon="fee"
             accent="gold"
             value={r.fee.value}
@@ -137,7 +180,7 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
             size="lg"
             footer={
               <span className="flex justify-between gap-2">
-                <span className="truncate">{describeFee(client)}</span>
+                <span className="truncate">{describeFee(r.fee.config)}</span>
                 <span className="num shrink-0 font-semibold text-fg">{formatMetric(r.fee.total, "currency")} total</span>
               </span>
             }
@@ -231,13 +274,16 @@ export default async function OverviewPage({ params, searchParams }: PageProps<"
               status: c.status,
               objective: c.objective,
               spend: c.spend,
-              result: r.resultMetric.compute(c),
-              cost: r.costMetric.compute(c),
+              result: c.result,
+              cost: c.cost,
+              resultUnit: c.resultUnit,
+              costUnit: c.costUnit,
               ctr: c.impressions ? c.linkClicks / c.impressions : null,
               secondary: null,
               spark: c.spark,
               href: `/c/${slug}/campaigns/${encodeURIComponent(c.id)}${q}`,
             }))}
+            mixed={r.mixedGoals}
             resultLabel={r.resultMetric.short}
             resultFormat={r.resultMetric.format}
             costLabel={r.costMetric.short}

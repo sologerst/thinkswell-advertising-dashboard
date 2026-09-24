@@ -33,6 +33,11 @@ Demo logins (password `thinkswell-demo`):
 | Artist (awareness/video) | `casey@velvetramblers.demo` | The Velvet Ramblers |
 | Hotel (traffic) | `avery@magnoliamain.demo` | Magnolia & Main Hotel |
 | Group owner (2 clients) | `sam@southbound-group.demo` | Neon Mesa + Cumberland (switcher) |
+| Event promoter (1 group) | `morgan@halloweenbash.demo` | Only Neon Mesa's "Halloween Bash 2026" group |
+
+The demo also shows campaign groups (tabs), client-friendly campaign names and mixed goals:
+Cumberland's "Brand Awareness" group is measured on video, and The Velvet Ramblers' "Tour
+Tickets" campaign is measured on ticket sales.
 
 Local data lives in `.data/pglite` (git-ignored). Delete that folder and re-run
 `npm run setup` to start fresh.
@@ -78,6 +83,7 @@ The daily cron (`vercel.json`, 11:00 UTC ≈ 6am Central) re-pulls the last
 | `npm run db:seed` | Migrate + create the first admin from `ADMIN_*` env vars |
 | `npm run db:migrate` | Apply migrations in `drizzle/` |
 | `npm run db:generate` | Generate a migration after editing `src/lib/db/schema.ts` |
+| `DATABASE_URL=… npm run db:migrate` | Apply new migrations to Supabase (use the pooler URL) |
 | `npm run sync -- --days 30` | Pull from Windsor (or refresh demo data) from the CLI |
 | `npm run typecheck` / `npm run lint` / `npm run build` | Checks |
 

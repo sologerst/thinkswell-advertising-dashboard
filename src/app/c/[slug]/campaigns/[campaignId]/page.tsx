@@ -10,13 +10,13 @@ import { ACCENT_HEX, KpiCard } from "@/components/dashboard/kpi-card";
 import { DashboardHeader } from "@/components/dashboard/page-header";
 import { PlatformSplit } from "@/components/dashboard/platform-split";
 import { Card, SectionTitle, StatusPill } from "@/components/ui";
-import { requireClientAccess } from "@/lib/auth/current";
+import { loadClientContext, setupFor } from "@/lib/client-context";
 import { getDb } from "@/lib/db";
 import { adAccounts } from "@/lib/db/schema";
 import { addDays, fmtDayYear, fmtRange, fmtWeekday } from "@/lib/dates";
 import { formatMetric, titleCase } from "@/lib/format";
 import { GOAL_PRESETS, getMetric } from "@/lib/metrics/catalog";
-import { getByAd, getByAdSet, getByPlatform, getCampaignInScope, getDaily, loadScope, sumRows } from "@/lib/metrics/query";
+import { getByAd, getByAdSet, getByPlatform, getCampaignInScope, getDaily, sumRows } from "@/lib/metrics/query";
 import { clientKpis, kpiFor } from "@/lib/metrics/report";
 import { keepQuery, readDashboardParams } from "@/lib/params";
 
@@ -24,23 +24,27 @@ type Props = PageProps<"/c/[slug]/campaigns/[campaignId]">;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug, campaignId } = await params;
-  const { client } = await requireClientAccess(slug);
-  const scope = await loadScope(client);
-  const c = await getCampaignInScope(scope, decodeURIComponent(campaignId));
-  return { title: c ? `${c.name} · ${client.name}` : client.name };
+  const ctx = await loadClientContext(slug);
+  const id = decodeURIComponent(campaignId);
+  const c = await getCampaignInScope(ctx.scope, id);
+  return { title: c ? `${ctx.nameFor(id, c.name)} · ${ctx.client.name}` : ctx.client.name };
 }
 
 export default async function CampaignPage({ params, searchParams }: Props) {
   const { slug, campaignId: rawId } = await params;
   const campaignId = decodeURIComponent(rawId);
   const sp = await searchParams;
-  const { client } = await requireClientAccess(slug);
+  const ctx = await loadClientContext(slug);
+  const { client, scope } = ctx;
   const { today, range, platform } = readDashboardParams(sp);
-  const scope = await loadScope(client);
+  // The scope already excludes campaigns this person isn't allowed to see.
   const campaign = await getCampaignInScope(scope, campaignId);
   if (!campaign) notFound();
 
-  const preset = GOAL_PRESETS[client.goal];
+  const setup = setupFor(client, ctx.goalFor(campaignId));
+  const group = ctx.groupFor(campaignId);
+  const displayName = ctx.nameFor(campaignId, campaign.name);
+  const preset = GOAL_PRESETS[setup.goal];
   const resultMetric = getMetric(preset.result)!;
   const costMetric = getMetric(preset.costPerResult)!;
   const f = { from: range.from, to: range.to, platform, campaignId };
@@ -60,10 +64,9 @@ export default async function CampaignPage({ params, searchParams }: Props) {
   const prev = sumRows(prevDaily);
   const all = sumRows(allDaily);
   const spend = kpiFor(getMetric("spend")!, cur, prev, daily);
-  const kpis = clientKpis(client).map((m) => kpiFor(m, cur, prev, daily));
+  const kpis = clientKpis(setup).map((m) => kpiFor(m, cur, prev, daily));
   const compareLabel = "vs prev. period";
   const share = all.spend > 0 ? cur.spend / all.spend : null;
-  const q = keepQuery(sp);
 
   const trendMetrics: TrendMetric[] = [spend, ...kpis].slice(0, 7).map((k) => {
     const def = getMetric(k.key)!;
@@ -83,14 +86,25 @@ export default async function CampaignPage({ params, searchParams }: Props) {
 
   return (
     <>
-      <Link href={`/c/${slug}/campaigns${q}`} className="mb-5 inline-flex items-center gap-1.5 text-sm font-semibold text-fg-3 transition hover:text-cyan">
-        <ArrowLeft className="size-4" /> All campaigns
+      <Link
+        href={`/c/${slug}/campaigns${keepQuery(sp, { group: group && ctx.groups.some((g) => g.id === group.id) ? group.id : null })}`}
+        className="mb-5 inline-flex items-center gap-1.5 text-sm font-semibold text-fg-3 transition hover:text-cyan"
+      >
+        <ArrowLeft className="size-4" /> {group ? group.name : "All campaigns"}
       </Link>
       <DashboardHeader
         eyebrow={
           <>
             <StatusPill status={campaign.status} />
-            {campaign.objective && <span>{titleCase(campaign.objective.replace(/^OUTCOME_/, ""))} campaign</span>}
+            <span>
+              {preset.emoji} {preset.label}
+            </span>
+            {campaign.objective && (
+              <>
+                <span className="text-fg-3/60">•</span>
+                <span>{titleCase(campaign.objective.replace(/^OUTCOME_/, ""))} objective</span>
+              </>
+            )}
             {account[0] && (
               <>
                 <span className="text-fg-3/60">•</span>
@@ -99,10 +113,11 @@ export default async function CampaignPage({ params, searchParams }: Props) {
             )}
           </>
         }
-        title={<span className="block max-w-3xl">{campaign.name}</span>}
+        title={<span className="block max-w-3xl">{displayName}</span>}
         subtitle={
           <span>
             {flight} <span className="text-fg-3">· showing {range.label.toLowerCase()}</span>
+            {ctx.isPreview && displayName !== campaign.name && <span className="block text-xs text-fg-3">Ads Manager name: {campaign.name}</span>}
           </span>
         }
         range={range}

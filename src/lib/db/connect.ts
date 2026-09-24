@@ -16,6 +16,12 @@ export const LOCAL_DB_DIR = path.join(process.cwd(), ".data", "pglite");
  */
 export async function createDb(): Promise<Db> {
   const url = process.env.DATABASE_URL;
+  if (url && process.env.VERCEL && /@db\.[a-z0-9]+\.supabase\.co/i.test(url)) {
+    // Vercel functions are IPv4-only; Supabase's direct host is IPv6-only.
+    throw new Error(
+      "DATABASE_URL uses Supabase's direct host (db.<ref>.supabase.co), which Vercel can't reach. Use the Transaction pooler connection string (…pooler.supabase.com:6543) instead.",
+    );
+  }
   if (url) {
     const { default: postgres } = await import("postgres");
     const { drizzle } = await import("drizzle-orm/postgres-js");

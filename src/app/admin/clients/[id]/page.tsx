@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { ArrowLeft, ArrowUpRight, KeyRound, UserMinus, UserX, UserCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, KeyRound, Layers, UserCheck, UserMinus, UserX } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -8,7 +8,10 @@ import {
   createAccessLink,
   inviteClientUser,
   removeMember,
+  saveCampaignSettings,
+  saveGroups,
   setClientArchived,
+  setMemberAccess,
   setUserDisabled,
   updateClientAccess,
   updateClientFee,
@@ -16,9 +19,10 @@ import {
   updateClientSetup,
 } from "@/app/actions/admin";
 import { ActionForm, InlineAction } from "@/components/admin/action-form";
+import { CampaignSettingsEditor, GroupsEditor, MemberAccessFields } from "@/components/admin/campaign-fields";
 import { AccessFields, FeeFields, SetupFields } from "@/components/admin/setup-fields";
 import { Avatar, ButtonLink, Card, ClientBadge, Notice, UserStatus } from "@/components/ui";
-import { accountsWithUsage, membersOf } from "@/lib/admin-data";
+import { accountsWithUsage, groupSetup, membersOf } from "@/lib/admin-data";
 import { getDb } from "@/lib/db";
 import { clientAccounts, clientCampaigns, clients } from "@/lib/db/schema";
 import { timeAgo } from "@/lib/format";
@@ -45,13 +49,25 @@ export default async function ClientSetupPage({ params, searchParams }: Props) {
   if (!client) notFound();
 
   const db = await getDb();
-  const [accounts, linked, picked, members] = await Promise.all([
+  const [accounts, linked, picked, members, gs] = await Promise.all([
     accountsWithUsage(),
     db.select({ id: clientAccounts.accountId }).from(clientAccounts).where(eq(clientAccounts.clientId, id)),
     db.select({ id: clientCampaigns.campaignId }).from(clientCampaigns).where(eq(clientCampaigns.clientId, id)),
     membersOf(id),
+    groupSetup(id),
   ]);
   const campaignOptions = await listCampaignsForAccounts(accounts.map((a) => a.id));
+
+  // Campaigns this client can actually see, for naming/grouping (mirrors scopeWhere's rules).
+  const linkedIds = new Set(linked.map((l) => l.id));
+  const pickedIds = new Set(picked.map((p) => p.id));
+  const nameFilter = client.campaignNameFilter?.trim().toLowerCase();
+  const visibleCampaigns = campaignOptions
+    .filter((c) => linkedIds.has(c.accountId))
+    .filter((c) => (client.campaignMode === "include" ? pickedIds.has(c.id) : client.campaignMode === "exclude" ? !pickedIds.has(c.id) : true))
+    .filter((c) => !nameFilter || c.name.toLowerCase().includes(nameFilter))
+    .sort((a, b) => Number(b.status === "ACTIVE") - Number(a.status === "ACTIVE") || a.name.localeCompare(b.name));
+  const groupOpts = gs.groups.map((g) => ({ id: g.id, name: g.name, goal: g.goal }));
 
   return (
     <>
@@ -86,6 +102,7 @@ export default async function ClientSetupPage({ params, searchParams }: Props) {
               ["#dashboard", "Dashboard setup"],
               ["#fee", "Agency fee"],
               ["#access", "Data access"],
+              ["#campaigns", "Campaigns & groups"],
               ["#people", "People"],
             ].map(([href, label]) => (
               <a key={href} href={href} className="block rounded-lg px-3 py-1.5 font-semibold text-fg-3 transition hover:bg-white/5 hover:text-fg">
@@ -146,7 +163,32 @@ export default async function ClientSetupPage({ params, searchParams }: Props) {
             </ActionForm>
           </Section>
 
-          <Section id="people" title="People" sub="Everyone here can sign in and see this dashboard, and nothing else.">
+          <Section
+            id="campaigns"
+            title="Campaigns & groups"
+            sub="Bundle campaigns into groups that show as tabs on the dashboard, rename campaigns for the client, and set what each one is measured on."
+          >
+            <div className="mb-2 text-sm font-bold text-fg">Groups</div>
+            <ActionForm action={saveGroups} submitLabel="Save groups">
+              <input type="hidden" name="clientId" value={client.id} />
+              <GroupsEditor key={gs.groups.map((g) => g.id).join()} initial={groupOpts} clientGoal={client.goal} />
+            </ActionForm>
+            <div className="mt-8 mb-2 text-sm font-bold text-fg">Campaigns</div>
+            <ActionForm action={saveCampaignSettings} submitLabel="Save campaigns">
+              <input type="hidden" name="clientId" value={client.id} />
+              <CampaignSettingsEditor
+                key={gs.groups.map((g) => g.id).join()}
+                groups={groupOpts}
+                clientGoal={client.goal}
+                campaigns={visibleCampaigns.map((c) => {
+                  const st = gs.settings.get(c.id);
+                  return { id: c.id, name: c.name, status: c.status, displayName: st?.displayName ?? "", groupId: st?.groupId ?? "", goal: st?.goal ?? "" };
+                })}
+              />
+            </ActionForm>
+          </Section>
+
+          <Section id="people" title="People" sub="Everyone here can sign in and see this dashboard, and nothing else. Limit someone to certain groups to share just one event or promo.">
             {members.length === 0 ? (
               <p className="mb-5 rounded-xl border border-dashed border-line p-4 text-sm text-fg-3">No one has access yet. Invite the client&apos;s team below.</p>
             ) : (
@@ -162,6 +204,24 @@ export default async function ClientSetupPage({ params, searchParams }: Props) {
                       <div className="truncate text-xs text-fg-3">
                         {m.email} · {m.lastLoginAt ? `last seen ${timeAgo(m.lastLoginAt)}` : "hasn't signed in yet"}
                       </div>
+                      {groupOpts.length > 0 && (
+                        <details className="group/acc mt-2">
+                          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-xs font-semibold text-fg-2 hover:text-cyan">
+                            <Layers className="size-3.5 text-gold" />
+                            {m.restricted
+                              ? `Sees only: ${(gs.accessByUser.get(m.id) ?? []).map((gid) => groupOpts.find((g) => g.id === gid)?.name).filter(Boolean).join(", ") || "nothing yet"}`
+                              : "Sees all campaigns"}
+                            <span className="text-fg-3 group-open/acc:hidden">· change</span>
+                          </summary>
+                          <div className="mt-2 max-w-lg rounded-xl border border-line bg-ink-900/60 p-3">
+                            <ActionForm action={setMemberAccess} submitLabel="Save access" variant="secondary">
+                              <input type="hidden" name="clientId" value={client.id} />
+                              <input type="hidden" name="userId" value={m.id} />
+                              <MemberAccessFields groups={groupOpts} restricted={m.restricted} selected={gs.accessByUser.get(m.id) ?? []} />
+                            </ActionForm>
+                          </div>
+                        </details>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-start gap-2">
                       <InlineAction action={createAccessLink} hidden={{ userId: m.id }} label={m.hasPassword ? "Reset link" : "Invite link"} icon={<KeyRound className="size-3.5" />} />
@@ -193,6 +253,12 @@ export default async function ClientSetupPage({ params, searchParams }: Props) {
                   <input name="name" placeholder="Full name" required className="tw-input" />
                   <input name="email" type="email" placeholder="name@company.com" required className="tw-input" />
                 </div>
+                {groupOpts.length > 0 && (
+                  <div className="mt-3">
+                    <div className="tw-label">What can they see?</div>
+                    <MemberAccessFields groups={groupOpts} restricted={false} selected={[]} />
+                  </div>
+                )}
                 <p className="mt-2 text-xs text-fg-3">
                   You&apos;ll get a one-time link to send them (it&apos;s emailed automatically if email is configured). Adding someone who already has a login just gives them access to
                   this dashboard too.
