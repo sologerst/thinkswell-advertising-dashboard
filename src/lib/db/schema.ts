@@ -271,7 +271,7 @@ export const insights = pgTable(
 
 export const syncRuns = pgTable("sync_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
-  source: text("source").$type<"windsor" | "demo">().notNull(),
+  source: text("source").$type<"windsor" | "demo" | "creative">().notNull(),
   status: text("status").$type<"running" | "success" | "error">().notNull().default("running"),
   dateFrom: date("date_from", { mode: "string" }).notNull(),
   dateTo: date("date_to", { mode: "string" }).notNull(),

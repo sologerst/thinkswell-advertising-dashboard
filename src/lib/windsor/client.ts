@@ -25,6 +25,7 @@ export async function fetchFacebook(opts: {
   to: string;
   accounts?: string[];
   attributionWindow?: string;
+  timeoutMs?: number;
 }): Promise<Row[]> {
   const key = windsorKey();
   if (!key) throw new WindsorError("WINDSOR_API_KEY is not set.");
@@ -37,7 +38,7 @@ export async function fetchFacebook(opts: {
   const window = opts.attributionWindow ?? process.env.WINDSOR_ATTRIBUTION_WINDOW;
   if (window) url.searchParams.set("options", JSON.stringify({ facebook: { attribution_window: window } }));
 
-  const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(120_000) });
+  const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000) });
   const text = await res.text();
   let body: unknown;
   try {

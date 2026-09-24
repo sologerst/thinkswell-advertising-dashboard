@@ -6,7 +6,7 @@
 import { createDb, runMigrations } from "@/lib/db/connect";
 import { addDays, isISODate, todayISO } from "@/lib/dates";
 import { syncDemo } from "@/lib/sync/demo-sync";
-import { syncWindsor } from "@/lib/sync/windsor-sync";
+import { refreshCreatives, syncWindsor } from "@/lib/sync/windsor-sync";
 import { isLiveMode } from "@/lib/windsor/client";
 
 function arg(name: string) {
@@ -26,6 +26,9 @@ async function main() {
     const r = await syncWindsor(db, { from, to, triggeredBy: "cli" });
     console.log(`✓ Windsor sync ${from} → ${to}: ${r.rows} rows across ${r.accounts} accounts`);
     for (const w of r.warnings) console.warn(`  ! ${w}`);
+    const c = await refreshCreatives(db, { to, triggeredBy: "cli" });
+    console.log(`✓ Creative previews refreshed for ${c.updated} ads`);
+    for (const w of c.warnings) console.warn(`  ! ${w}`);
   } else {
     const r = await syncDemo(db, { from, to, triggeredBy: "cli" });
     console.log(`✓ Demo data refreshed ${from} → ${to}: ${r.rows} rows (set WINDSOR_API_KEY for live data)`);

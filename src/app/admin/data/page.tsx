@@ -134,8 +134,8 @@ export default async function DataPage() {
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="text-fg">
-                        {r.source === "demo" ? "Demo refresh" : "Windsor sync"} · {fmtRange(r.dateFrom, r.dateTo)}
-                        {r.status === "success" && <span className="text-fg-3"> · {r.rows.toLocaleString()} rows</span>}
+                        {r.source === "demo" ? "Demo refresh" : r.source === "creative" ? "Creative previews" : "Windsor sync"} · {fmtRange(r.dateFrom, r.dateTo)}
+                        {r.status === "success" && <span className="text-fg-3"> · {r.rows.toLocaleString()} {r.source === "creative" ? "ads" : "rows"}</span>}
                       </div>
                       {r.error && <div className={`mt-0.5 text-xs break-words ${r.status === "error" ? "text-bad" : "text-gold"}`}>{r.error}</div>}
                       <div className="mt-0.5 text-xs text-fg-3">

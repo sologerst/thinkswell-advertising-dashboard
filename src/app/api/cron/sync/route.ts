@@ -1,9 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
 import { addDays, todayISO } from "@/lib/dates";
 import { syncDemo } from "@/lib/sync/demo-sync";
-import { syncWindsor } from "@/lib/sync/windsor-sync";
+import { refreshCreatives, syncWindsor } from "@/lib/sync/windsor-sync";
 import { isLiveMode } from "@/lib/windsor/client";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +28,8 @@ export async function GET(req: NextRequest) {
   try {
     if (isLiveMode()) {
       const r = await syncWindsor(db, { from, to: today, triggeredBy: "cron" });
+      // Slow (minutes): runs after the response, logged as its own sync run.
+      after(() => refreshCreatives(db, { to: today, triggeredBy: "cron" }).catch((e) => console.error("[sync] creative refresh failed", e)));
       return NextResponse.json({ ok: true, source: "windsor", from, to: today, ...r });
     }
     const r = await syncDemo(db, { from, to: today, triggeredBy: "cron" });

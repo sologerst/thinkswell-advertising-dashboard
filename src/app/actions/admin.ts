@@ -2,6 +2,7 @@
 
 import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/current";
@@ -12,7 +13,7 @@ import { addDays, todayISO } from "@/lib/dates";
 import { sendAccessEmail } from "@/lib/email";
 import { GOAL_PRESETS, METRIC_MAP } from "@/lib/metrics/catalog";
 import { syncDemo } from "@/lib/sync/demo-sync";
-import { syncWindsor } from "@/lib/sync/windsor-sync";
+import { refreshCreatives, syncWindsor } from "@/lib/sync/windsor-sync";
 import { isLiveMode, listFacebookAccounts } from "@/lib/windsor/client";
 
 export type ActionState = { ok?: string; error?: string; link?: string; emailed?: boolean } | undefined;
@@ -445,9 +446,10 @@ export async function runSync(_: ActionState, formData: FormData): Promise<Actio
   try {
     if (isLiveMode()) {
       const r = await syncWindsor(db, { from, to: today, triggeredBy: admin.email });
+      after(() => refreshCreatives(db, { to: today, triggeredBy: admin.email }).catch((e) => console.error("[sync] creative refresh failed", e)));
       revalidatePath("/", "layout");
       return {
-        ok: `Synced ${r.rows.toLocaleString()} rows from ${r.accounts} ad account${r.accounts === 1 ? "" : "s"}.${r.warnings.length ? ` ${r.warnings.length} warning(s); see the log below.` : ""}`,
+        ok: `Synced ${r.rows.toLocaleString()} rows from ${r.accounts} ad account${r.accounts === 1 ? "" : "s"}.${r.warnings.length ? ` ${r.warnings.length} warning(s); see the log below.` : ""} Ad previews keep refreshing in the background for a few minutes.`,
       };
     }
     const r = await syncDemo(db, { from, to: today, triggeredBy: admin.email });

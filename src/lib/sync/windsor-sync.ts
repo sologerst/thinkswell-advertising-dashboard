@@ -1,11 +1,11 @@
-import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type * as schemaTypes from "@/lib/db/schema";
 import { CREATIVE_FIELD_GROUPS, CREATIVE_FIELDS } from "@/lib/creative";
 import { addDays } from "@/lib/dates";
 import type { CreativeFields } from "@/lib/db/schema";
-import { adAccounts, adSets, ads, campaigns, insights, syncRuns } from "@/lib/db/schema";
-import { fetchFacebook, listFacebookAccounts, normalizeAccountId } from "@/lib/windsor/client";
+import { adAccounts, adSets, ads, campaigns, clientAccounts, insights, syncRuns } from "@/lib/db/schema";
+import { WindsorError, fetchFacebook, listFacebookAccounts, normalizeAccountId } from "@/lib/windsor/client";
 
 type Db = PgDatabase<PgQueryResultHKT, typeof schemaTypes>;
 
@@ -45,7 +45,7 @@ const DIMENSION_FIELDS = [
   "publisher_platform",
 ];
 
-// Second, breakdown-free request for statuses, objectives and creative thumbnails.
+// Second, breakdown-free request for statuses, objectives and thumbnails.
 const META_FIELDS = [
   "account_id",
   "campaign_id",
@@ -68,6 +68,9 @@ const META_FIELDS = [
  */
 const META_LOOKBACK_DAYS = 120;
 
+/** Leaves headroom inside the 300s function limit for the database writes. */
+const CREATIVE_TIMEOUT_MS = 240_000;
+
 const num = (v: unknown) => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -77,6 +80,7 @@ const str = (v: unknown) => (v === null || v === undefined || v === "" ? null : 
 export type SyncResult = { runId: string; rows: number; accounts: number; warnings: string[] };
 
 export async function syncWindsor(db: Db, opts: { from: string; to: string; triggeredBy: string; accountIds?: string[] }): Promise<SyncResult> {
+  await closeStaleRuns(db);
   const [run] = await db
     .insert(syncRuns)
     .values({ source: "windsor", dateFrom: opts.from, dateTo: opts.to, triggeredBy: opts.triggeredBy })
@@ -125,6 +129,7 @@ export async function syncWindsor(db: Db, opts: { from: string; to: string; trig
 }
 
 async function syncAccount(db: Db, accountId: string, from: string, to: string, warnings: string[]) {
+  const started = Date.now();
   const rows = await fetchFacebook({
     fields: [...DIMENSION_FIELDS, ...Object.values(METRIC_FIELDS)],
     from,
@@ -160,7 +165,10 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
     facts.set(key, f);
   }
 
-  // Statuses / objectives / thumbnails / creative assets. Optional: a failure here only warns.
+  const metricsMs = Date.now() - started;
+
+  // Statuses / objectives / thumbnails. Optional: a failure here only warns.
+  // (Creative assets are slower to fetch and come from refreshCreatives.)
   const metaFrom = from < addDays(to, -(META_LOOKBACK_DAYS - 1)) ? from : addDays(to, -(META_LOOKBACK_DAYS - 1));
   const meta = new Map<string, Record<string, unknown>>();
   try {
@@ -182,7 +190,7 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
   } catch (e) {
     warnings.push(`Metadata for account ${accountId}: ${(e as Error).message}`);
   }
-  const creatives = await fetchCreatives(accountId, metaFrom, to, warnings);
+  console.log(`[sync] ${accountId}: metrics ${metricsMs}ms (${rows.length} rows), metadata ${Date.now() - started - metricsMs}ms (${meta.size} keys)`);
 
   const campaignRows = [...camps.values()].map((c) => {
     const m = meta.get(`c:${c.id}`);
@@ -204,7 +212,7 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
   }));
   const adRows = [...adMap.values()].map((a) => {
     const m = meta.get(a.id);
-    return { ...a, accountId, status: str(m?.effective_status), thumbnailUrl: str(m?.thumbnail_url), creative: creatives.get(a.id) ?? null };
+    return { ...a, accountId, status: str(m?.effective_status), thumbnailUrl: str(m?.thumbnail_url) };
   });
   const factRows = [...facts.values()];
 
@@ -249,7 +257,6 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
             campaignId: sql`excluded.campaign_id`,
             status: sql`coalesce(excluded.status, ${ads.status})`,
             thumbnailUrl: sql`coalesce(excluded.thumbnail_url, ${ads.thumbnailUrl})`,
-            creative: sql`coalesce(excluded.creative, ${ads.creative})`,
           },
         });
     }
@@ -260,6 +267,54 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
   });
 
   return facts.size;
+}
+
+/**
+ * Refreshes creative assets (image / video URLs, Meta preview links) for ads in
+ * accounts linked to a client that delivered in the last META_LOOKBACK_DAYS.
+ * Windsor resolves each ad's media, which can take minutes, so the app runs this
+ * with `after()` once the main sync has responded. Logged as its own sync run.
+ */
+export async function refreshCreatives(db: Db, opts: { to: string; triggeredBy: string }) {
+  const from = addDays(opts.to, -(META_LOOKBACK_DAYS - 1));
+  await closeStaleRuns(db);
+  const [run] = await db
+    .insert(syncRuns)
+    .values({ source: "creative", dateFrom: from, dateTo: opts.to, triggeredBy: opts.triggeredBy })
+    .returning({ id: syncRuns.id });
+  const warnings: string[] = [];
+  try {
+    const linked = await db.selectDistinct({ id: clientAccounts.accountId }).from(clientAccounts);
+    // Accounts run in parallel since each request can take minutes.
+    const results = await Promise.all(
+      linked.map(async ({ id }) => {
+        const started = Date.now();
+        const creatives = await fetchCreatives(id, from, opts.to, warnings);
+        console.log(`[sync] ${id}: creative ${Date.now() - started}ms (${creatives.size} ads)`);
+        return creatives;
+      }),
+    );
+    let updated = 0;
+    for (const creatives of results) {
+      if (!creatives.size) continue;
+      await db.transaction(async (tx) => {
+        for (const [adId, creative] of creatives) await tx.update(ads).set({ creative }).where(eq(ads.id, adId));
+      });
+      updated += creatives.size;
+    }
+    if (warnings.length && updated === 0) throw new Error(warnings.join(" | "));
+    await db
+      .update(syncRuns)
+      .set({ status: "success", rows: updated, finishedAt: new Date(), error: warnings.length ? warnings.join(" | ") : null })
+      .where(eq(syncRuns.id, run!.id));
+    return { updated, warnings };
+  } catch (e) {
+    await db
+      .update(syncRuns)
+      .set({ status: "error", error: (e as Error).message, finishedAt: new Date() })
+      .where(eq(syncRuns.id, run!.id));
+    throw e;
+  }
 }
 
 /**
@@ -277,20 +332,40 @@ async function fetchCreatives(accountId: string, from: string, to: string, warni
       out.set(adId, c);
     }
   };
+  // One deadline for the request and any retries.
+  const deadline = Date.now() + CREATIVE_TIMEOUT_MS;
+  const get = (fields: readonly string[]) => {
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs < 10_000) throw new Error("Out of time.");
+    return fetchFacebook({ fields: ["ad_id", ...fields], from, to, accounts: [accountId], timeoutMs });
+  };
   try {
-    merge(await fetchFacebook({ fields: ["ad_id", ...CREATIVE_FIELDS], from, to, accounts: [accountId] }), CREATIVE_FIELDS);
-  } catch {
+    merge(await get(CREATIVE_FIELDS), CREATIVE_FIELDS);
+  } catch (e) {
+    // A timeout would only repeat, so only retry when Windsor itself rejected the request.
+    if (!(e instanceof WindsorError)) {
+      warnings.push(`Creative assets for account ${accountId}: ${(e as Error).message}`);
+      return out;
+    }
     const failed: string[] = [];
     for (const group of CREATIVE_FIELD_GROUPS) {
       try {
-        merge(await fetchFacebook({ fields: ["ad_id", ...group], from, to, accounts: [accountId] }), group);
-      } catch (e) {
-        failed.push(`${group.join(", ")}: ${(e as Error).message}`);
+        merge(await get(group), group);
+      } catch (e2) {
+        failed.push(`${group.join(", ")}: ${(e2 as Error).message}`);
       }
     }
     if (failed.length) warnings.push(`Creative assets for account ${accountId}: ${failed.join(" | ")}`);
   }
   return out;
+}
+
+/** A run still "running" after 10 minutes was cut off by the function time limit. */
+async function closeStaleRuns(db: Db) {
+  await db
+    .update(syncRuns)
+    .set({ status: "error", error: "Stopped: hit the time limit before finishing.", finishedAt: new Date() })
+    .where(and(eq(syncRuns.status, "running"), lt(syncRuns.startedAt, new Date(Date.now() - 10 * 60_000))));
 }
 
 export function chunks<T>(arr: T[], size = 500): T[][] {
