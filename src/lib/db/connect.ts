@@ -17,9 +17,9 @@ export const LOCAL_DB_DIR = path.join(process.cwd(), ".data", "pglite");
 export async function createDb(): Promise<Db> {
   const url = process.env.DATABASE_URL;
   if (url && process.env.VERCEL && /@db\.[a-z0-9]+\.supabase\.co/i.test(url)) {
-    // Vercel functions are IPv4-only; Supabase's direct host is IPv6-only.
+    // Vercel functions are IPv4-only; Supabase's direct host and Dedicated Pooler (both db.<ref>.supabase.co) are IPv6-only.
     throw new Error(
-      "DATABASE_URL uses Supabase's direct host (db.<ref>.supabase.co), which Vercel can't reach. Use the Transaction pooler connection string (…pooler.supabase.com:6543) instead.",
+      "DATABASE_URL points at db.<ref>.supabase.co (Supabase's direct connection or Dedicated Pooler), which is IPv6-only and unreachable from Vercel. Use the Shared Pooler (Supavisor) transaction-mode string instead: postgresql://postgres.<ref>:<password>@aws-…-<region>.pooler.supabase.com:6543/postgres",
     );
   }
   if (url) {

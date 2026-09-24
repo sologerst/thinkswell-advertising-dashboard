@@ -50,8 +50,11 @@ deploys to https://thinkswell-advertising-dashboard.vercel.app. `AUTH_SECRET`,
 `CRON_SECRET`, `APP_TIMEZONE` and `SYNC_LOOKBACK_DAYS` are already set there.
 Still needed: `DATABASE_URL` (Supabase) and `WINDSOR_API_KEY`, then a redeploy.
 
-1. **Supabase:** create a project. In *Connect → Transaction pooler*, copy the connection
-   string (port `6543`).
+1. **Supabase:** create a project. In *Connect*, choose the **Shared Pooler** in
+   transaction mode and copy that connection string. It looks like
+   `postgresql://postgres.<ref>:<password>@aws-…-us-east-1.pooler.supabase.com:6543/postgres`.
+   Don't use the direct or Dedicated Pooler strings (`db.<ref>.supabase.co`): they're
+   IPv6-only and Vercel can't reach them.
 2. **Migrate + first admin** (from your machine, pointing at Supabase):
    ```bash
    DATABASE_URL="postgresql://…:6543/postgres" \
