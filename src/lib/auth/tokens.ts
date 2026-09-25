@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { authTokens, type TokenPurpose } from "@/lib/db/schema";
+import { appUrl } from "@/lib/site";
 
 const TTL_HOURS: Record<TokenPurpose, number> = { invite: 24 * 7, reset: 24 };
 
@@ -38,13 +39,6 @@ export async function findValidToken(token: string) {
 export async function consumeToken(id: string) {
   const db = await getDb();
   await db.update(authTokens).set({ usedAt: new Date() }).where(eq(authTokens.id, id));
-}
-
-export function appUrl() {
-  const explicit = process.env.APP_URL?.replace(/\/$/, "");
-  if (explicit) return explicit;
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
-  return "http://localhost:3000";
 }
 
 export function tokenLink(token: string) {

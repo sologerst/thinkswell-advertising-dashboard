@@ -46,9 +46,13 @@ Local data lives in `.data/pglite` (git-ignored). Delete that folder and re-run
 
 **Vercel project:** `thinkswell-advertising-dashboard` in the Thinkswell team
 (`timthinkswellcs-projects`), linked to this repo. Every push to the production branch
-deploys to https://thinkswell-advertising-dashboard.vercel.app. `AUTH_SECRET`,
-`CRON_SECRET`, `APP_TIMEZONE` and `SYNC_LOOKBACK_DAYS` are already set there.
-Still needed: `DATABASE_URL` (Supabase) and `WINDSOR_API_KEY`, then a redeploy.
+deploys to **https://advertising.thinkswell.com**, the primary domain. Visits to
+thinkswell-advertising-dashboard.vercel.app redirect there, and `APP_URL` makes invite and
+reset links use it. `DATABASE_URL`, `WINDSOR_API_KEY`, `AUTH_SECRET`, `CRON_SECRET`,
+`APP_URL`, `APP_TIMEZONE` and `SYNC_LOOKBACK_DAYS` are set there. To email invites
+automatically, add `RESEND_API_KEY` and `EMAIL_FROM`.
+
+Setting up a fresh copy:
 
 1. **Supabase:** create a project. In *Connect*, choose the **Shared Pooler** in
    transaction mode and copy that connection string. It looks like
