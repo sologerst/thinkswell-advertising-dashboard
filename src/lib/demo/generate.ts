@@ -4,6 +4,7 @@
  * us regenerate any window without the history shifting around.
  */
 import { addDays, eachDay, fmtWeekday, type ISODate } from "@/lib/dates";
+import type { TargetingSpec } from "@/lib/db/schema";
 
 type Profile = "sales" | "leads" | "awareness" | "traffic";
 
@@ -85,11 +86,184 @@ function c(
   return { id, name, objective, profile, budget, start, end, status, quality };
 }
 
-const AUDIENCES: Record<Profile, string[]> = {
-  sales: ["Nashville 21–45 · Live Music", "Lookalike 1% · Ticket Buyers", "Retargeting · Site Visitors 30d"],
-  leads: ["Nashville Metro · Event Planners", "Lookalike 2% · Past Inquiries", "Retargeting · Engaged 60d"],
-  awareness: ["Broad US · Country & Americana", "Fans of Similar Artists", "Tour Markets · 50mi Radius"],
-  traffic: ["Drive Markets · 300mi", "Lookalike 1% · Past Guests", "Retargeting · Booking Engine 14d"],
+/* ---------- ad sets: names + Meta-style targeting specs ---------- */
+
+const city = (name: string, region: string, radius: number) => ({ name, region, country: "US", radius, distance_unit: "mile" });
+const named = (...list: string[]) => list.map((name) => ({ name }));
+const FEEDS_STORIES_REELS = {
+  publisher_platforms: ["facebook", "instagram"],
+  facebook_positions: ["feed", "story", "facebook_reels"],
+  instagram_positions: ["stream", "story", "reels"],
+};
+const ADVANTAGE = { targeting_automation: { advantage_audience: 1 } };
+
+const AUDIENCES: Record<Profile, { name: string; targeting: TargetingSpec }[]> = {
+  sales: [
+    {
+      name: "Nashville 21–45 · Live Music",
+      targeting: {
+        geo_locations: { cities: [city("Nashville", "Tennessee", 25)], location_types: ["home", "recent"] },
+        age_min: 21,
+        age_max: 45,
+        flexible_spec: [{ interests: named("Live music", "Concerts", "Country music", "Indie rock") }],
+        ...FEEDS_STORIES_REELS,
+      },
+    },
+    {
+      name: "Lookalike 1% · Ticket Buyers",
+      targeting: {
+        geo_locations: { regions: named("Tennessee", "Kentucky", "Alabama") },
+        age_min: 21,
+        age_max: 65,
+        custom_audiences: named("Lookalike (US, 1%) - Ticket Purchasers 180d"),
+        excluded_custom_audiences: named("Ticket Purchasers 30d"),
+        ...ADVANTAGE,
+      },
+    },
+    {
+      name: "Retargeting · Site Visitors 30d",
+      targeting: {
+        geo_locations: { cities: [city("Nashville", "Tennessee", 40)] },
+        age_min: 18,
+        age_max: 65,
+        custom_audiences: named("Website Visitors 30d", "Instagram Engagers 60d"),
+        excluded_custom_audiences: named("Ticket Purchasers 30d"),
+        publisher_platforms: ["facebook", "instagram"],
+        facebook_positions: ["feed", "story"],
+        instagram_positions: ["stream", "story", "explore", "reels"],
+      },
+    },
+  ],
+  leads: [
+    {
+      name: "Nashville Metro · Event Planners",
+      targeting: {
+        geo_locations: { cities: [city("Nashville", "Tennessee", 30)] },
+        age_min: 25,
+        age_max: 60,
+        flexible_spec: [{ work_positions: named("Event planner", "Office manager", "Executive assistant"), interests: named("Event planning", "Corporate events") }],
+        publisher_platforms: ["facebook", "instagram"],
+        facebook_positions: ["feed", "marketplace"],
+        instagram_positions: ["stream", "story"],
+      },
+    },
+    {
+      name: "Lookalike 2% · Past Inquiries",
+      targeting: {
+        geo_locations: { regions: named("Tennessee") },
+        age_min: 25,
+        age_max: 65,
+        custom_audiences: named("Lookalike (US, 2%) - Lead Form Submitters"),
+        excluded_custom_audiences: named("Lead Form Submitters 180d"),
+        ...ADVANTAGE,
+      },
+    },
+    {
+      name: "Retargeting · Engaged 60d",
+      targeting: {
+        geo_locations: { cities: [city("Nashville", "Tennessee", 50)] },
+        age_min: 21,
+        age_max: 65,
+        custom_audiences: named("Facebook Page Engagers 60d", "Instagram Engagers 60d", "Video Viewers 50% 60d"),
+        excluded_custom_audiences: named("Lead Form Submitters 180d"),
+        ...FEEDS_STORIES_REELS,
+      },
+    },
+  ],
+  awareness: [
+    {
+      name: "Broad US · Country & Americana",
+      targeting: {
+        geo_locations: { countries: ["US"] },
+        age_min: 18,
+        age_max: 54,
+        flexible_spec: [{ interests: named("Country music", "Americana", "Folk music", "Chris Stapleton", "Tyler Childers") }],
+        targeting_optimization: "expansion_all",
+        publisher_platforms: ["facebook", "instagram"],
+        facebook_positions: ["feed", "video_feeds", "facebook_reels", "instream_video"],
+        instagram_positions: ["stream", "story", "reels", "explore"],
+      },
+    },
+    {
+      name: "Fans of Similar Artists",
+      targeting: {
+        geo_locations: { countries: ["US"] },
+        age_min: 18,
+        age_max: 44,
+        flexible_spec: [
+          { interests: named("Zach Bryan", "Sturgill Simpson", "Jason Isbell", "Margo Price") },
+          { interests: named("Concerts", "Music festivals") },
+        ],
+        ...FEEDS_STORIES_REELS,
+      },
+    },
+    {
+      name: "Tour Markets · 50mi Radius",
+      targeting: {
+        geo_locations: {
+          cities: [
+            city("Nashville", "Tennessee", 50),
+            city("Atlanta", "Georgia", 50),
+            city("Austin", "Texas", 50),
+            city("Denver", "Colorado", 50),
+            city("Chicago", "Illinois", 50),
+            city("Asheville", "North Carolina", 50),
+            city("Louisville", "Kentucky", 50),
+            city("Birmingham", "Alabama", 50),
+            city("Knoxville", "Tennessee", 50),
+            city("St. Louis", "Missouri", 50),
+          ],
+        },
+        age_min: 18,
+        age_max: 65,
+        publisher_platforms: ["facebook", "instagram"],
+      },
+    },
+  ],
+  traffic: [
+    {
+      name: "Drive Markets · 300mi",
+      targeting: {
+        geo_locations: { custom_locations: [{ address_string: "Downtown Nashville, TN", radius: 300, distance_unit: "mile" }], location_types: ["home"] },
+        age_min: 25,
+        age_max: 65,
+        flexible_spec: [{ interests: named("Weekend getaways", "Boutique hotels", "Travel"), behaviors: named("Frequent travelers") }],
+        ...ADVANTAGE,
+      },
+    },
+    {
+      name: "Lookalike 1% · Past Guests",
+      targeting: {
+        geo_locations: { countries: ["US"] },
+        age_min: 28,
+        age_max: 65,
+        custom_audiences: named("Lookalike (US, 1%) - Past Guests (CRM)"),
+        excluded_custom_audiences: named("Booked in the last 30 days"),
+        ...FEEDS_STORIES_REELS,
+      },
+    },
+    {
+      name: "Retargeting · Booking Engine 14d",
+      targeting: {
+        geo_locations: { countries: ["US"] },
+        age_min: 21,
+        age_max: 65,
+        custom_audiences: named("Booking Engine Visitors 14d", "Website Visitors 30d"),
+        excluded_custom_audiences: named("Booked in the last 30 days"),
+        publisher_platforms: ["facebook", "instagram"],
+        facebook_positions: ["feed"],
+        instagram_positions: ["stream", "story"],
+        device_platforms: ["mobile"],
+      },
+    },
+  ],
+};
+
+const OPTIMIZATION_GOALS: Record<Profile, string> = {
+  sales: "OFFSITE_CONVERSIONS",
+  leads: "LEAD_GENERATION",
+  awareness: "THRUPLAY",
+  traffic: "LANDING_PAGE_VIEWS",
 };
 
 const CREATIVES: Record<Profile, { name: string; title: string; body: string }[]> = {
@@ -146,7 +320,7 @@ export type DemoData = ReturnType<typeof generateDemo>;
 export function generateDemo(opts: { from: ISODate; to: ISODate; today: ISODate; todayFraction?: number }) {
   const accounts = DEMO_ACCOUNTS.map((a) => ({ id: a.id, name: a.name, currency: "USD", source: "demo" as const }));
   const campaigns: { id: string; accountId: string; name: string; status: string; objective: string; dailyBudget: number; startDate: string; endDate: string | null }[] = [];
-  const adSets: { id: string; campaignId: string; accountId: string; name: string; status: string }[] = [];
+  const adSets: { id: string; campaignId: string; accountId: string; name: string; status: string; targeting: TargetingSpec; optimizationGoal: string }[] = [];
   const ads: { id: string; adSetId: string; campaignId: string; accountId: string; name: string; status: string; title: string; body: string; thumbnailUrl: null }[] = [];
   const rows: Record<string, string | number>[] = [];
 
@@ -171,7 +345,15 @@ export function generateDemo(opts: { from: ISODate; to: ISODate; today: ISODate;
       for (let si = 0; si < setCount; si++) {
         const setId = `${camp.id}${si + 1}0`;
         const setWeight = [0.5, 0.3, 0.2][si]! * (setCount === 2 ? 1.25 : 1);
-        adSets.push({ id: setId, campaignId: camp.id, accountId: acct.id, name: audiences[si]!, status: camp.status === "ACTIVE" ? "ACTIVE" : camp.status });
+        adSets.push({
+          id: setId,
+          campaignId: camp.id,
+          accountId: acct.id,
+          name: audiences[si]!.name,
+          status: camp.status === "ACTIVE" ? "ACTIVE" : camp.status,
+          targeting: audiences[si]!.targeting,
+          optimizationGoal: OPTIMIZATION_GOALS[camp.profile],
+        });
         const adCount = si === 0 ? 3 : 2;
         for (let ai = 0; ai < adCount; ai++) {
           const cr = creatives[(ai + si) % creatives.length]!;

@@ -3,7 +3,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type * as schemaTypes from "@/lib/db/schema";
 import { CREATIVE_FIELD_GROUPS, CREATIVE_FIELDS } from "@/lib/creative";
 import { addDays } from "@/lib/dates";
-import type { CreativeFields } from "@/lib/db/schema";
+import type { CreativeFields, TargetingSpec } from "@/lib/db/schema";
 import { adAccounts, adSets, ads, campaigns, clientAccounts, insights, syncRuns } from "@/lib/db/schema";
 import { WindsorError, fetchFacebook, listFacebookAccounts, normalizeAccountId } from "@/lib/windsor/client";
 
@@ -60,6 +60,10 @@ const META_FIELDS = [
   "effective_status",
   "thumbnail_url",
 ];
+
+// Third request for ad set setup: targeting spec and optimization goal ("adsset" is Windsor's spelling).
+// Kept apart from META_FIELDS so a rejected field here can't cost us statuses.
+const AD_SET_FIELDS = ["adset_id", "adset_targeting", "adsset_optimization_goal"];
 
 /**
  * Statuses and creative links are fetched over at least this many days, so ads
@@ -167,13 +171,19 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
 
   const metricsMs = Date.now() - started;
 
-  // Statuses / objectives / thumbnails. Optional: a failure here only warns.
-  // (Creative assets are slower to fetch and come from refreshCreatives.)
+  // Statuses / objectives / thumbnails, and ad set targeting, fetched side by side.
+  // Both are optional: a failure only warns. (Creative assets are slower to fetch
+  // and come from refreshCreatives.)
   const metaFrom = from < addDays(to, -(META_LOOKBACK_DAYS - 1)) ? from : addDays(to, -(META_LOOKBACK_DAYS - 1));
+  const [metaResult, setResult] = await Promise.allSettled([
+    fetchFacebook({ fields: META_FIELDS, from: metaFrom, to, accounts: [accountId] }),
+    fetchFacebook({ fields: AD_SET_FIELDS, from: metaFrom, to, accounts: [accountId] }),
+  ]);
   const meta = new Map<string, Record<string, unknown>>();
-  try {
-    const metaRows = await fetchFacebook({ fields: META_FIELDS, from: metaFrom, to, accounts: [accountId] });
-    for (const m of metaRows) {
+  if (metaResult.status === "rejected") {
+    warnings.push(`Metadata for account ${accountId}: ${(metaResult.reason as Error).message}`);
+  } else {
+    for (const m of metaResult.value) {
       const adId = str(m.ad_id);
       if (adId) meta.set(adId, m);
       const cid = str(m.campaign_id);
@@ -187,10 +197,28 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
         adMap.set(adId, { id: adId, name: str(m.ad_name) ?? adId, adSetId: sid, campaignId: cid });
       }
     }
-  } catch (e) {
-    warnings.push(`Metadata for account ${accountId}: ${(e as Error).message}`);
   }
-  console.log(`[sync] ${accountId}: metrics ${metricsMs}ms (${rows.length} rows), metadata ${Date.now() - started - metricsMs}ms (${meta.size} keys)`);
+  const setDetails = new Map<string, { targeting: TargetingSpec | null; optimizationGoal: string | null }>();
+  if (setResult.status === "rejected") {
+    warnings.push(`Ad set targeting for account ${accountId}: ${(setResult.reason as Error).message}`);
+  } else {
+    let unreadable = 0;
+    for (const r of setResult.value) {
+      const sid = str(r.adset_id);
+      if (!sid) continue;
+      const targeting = parseTargeting(r.adset_targeting);
+      if (targeting === undefined) unreadable++;
+      const prev = setDetails.get(sid);
+      setDetails.set(sid, {
+        targeting: targeting ?? prev?.targeting ?? null,
+        optimizationGoal: str(r.adsset_optimization_goal) ?? prev?.optimizationGoal ?? null,
+      });
+    }
+    if (unreadable) warnings.push(`Ad set targeting for account ${accountId}: ${unreadable} row(s) weren't readable JSON.`);
+  }
+  console.log(
+    `[sync] ${accountId}: metrics ${metricsMs}ms (${rows.length} rows), metadata + ad sets ${Date.now() - started - metricsMs}ms (${meta.size} keys, ${setDetails.size} ad sets)`,
+  );
 
   const campaignRows = [...camps.values()].map((c) => {
     const m = meta.get(`c:${c.id}`);
@@ -209,6 +237,8 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
     accountId,
     name: s.name,
     status: str(meta.get(`s:${s.id}`)?.adset_effective_status),
+    targeting: setDetails.get(s.id)?.targeting ?? null,
+    optimizationGoal: setDetails.get(s.id)?.optimizationGoal ?? null,
   }));
   const adRows = [...adMap.values()].map((a) => {
     const m = meta.get(a.id);
@@ -242,6 +272,8 @@ async function syncAccount(db: Db, accountId: string, from: string, to: string, 
             name: sql`excluded.name`,
             campaignId: sql`excluded.campaign_id`,
             status: sql`coalesce(excluded.status, ${adSets.status})`,
+            targeting: sql`coalesce(excluded.targeting, ${adSets.targeting})`,
+            optimizationGoal: sql`coalesce(excluded.optimization_goal, ${adSets.optimizationGoal})`,
           },
         });
     }
@@ -358,6 +390,21 @@ async function fetchCreatives(accountId: string, from: string, to: string, warni
     if (failed.length) warnings.push(`Creative assets for account ${accountId}: ${failed.join(" | ")}`);
   }
   return out;
+}
+
+/**
+ * Windsor documents the targeting spec as JSON text; an already-parsed object is
+ * accepted too. Returns null when there's none, undefined when it isn't readable.
+ */
+function parseTargeting(v: unknown): TargetingSpec | null | undefined {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "object") return Array.isArray(v) ? undefined : (v as TargetingSpec);
+  try {
+    const parsed: unknown = JSON.parse(String(v));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as TargetingSpec) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A run still "running" after 10 minutes was cut off by the function time limit. */

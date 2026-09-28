@@ -29,6 +29,13 @@
       "when": 1790278289120,
       "tag": "0003_ad_creative",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790604956289,
+      "tag": "0004_adset_targeting",
+      "breakpoints": true
     }
   ]
 }

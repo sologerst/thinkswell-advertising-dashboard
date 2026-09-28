@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, max, notInArray, sql, type SQL } from "drizzle-orm";
 import { adMedia, type AdMedia } from "@/lib/creative";
 import { getDb } from "@/lib/db";
-import { adSets, ads, campaigns, clientAccounts, clientCampaigns, insights, type Client, type CreativeFields } from "@/lib/db/schema";
+import { adSets, ads, campaigns, clientAccounts, clientCampaigns, insights, type Client, type CreativeFields, type TargetingSpec } from "@/lib/db/schema";
 import { eachDay, type ISODate } from "@/lib/dates";
 import { BASE_FIELDS, emptyTotals, type BaseField, type Totals } from "./catalog";
 
@@ -177,7 +177,14 @@ export async function getByPlatform(scope: Scope, f: Filters): Promise<PlatformR
   return rows.map((r) => ({ platform: r.platform, ...pickTotals(r) }));
 }
 
-export type AdSetRow = Totals & { id: string; name: string; status: string | null };
+export type AdSetRow = Totals & {
+  id: string;
+  name: string;
+  status: string | null;
+  targeting: TargetingSpec | null;
+  optimizationGoal: string | null;
+  adCount: number;
+};
 
 export async function getByAdSet(scope: Scope, f: Filters): Promise<AdSetRow[]> {
   const db = await getDb();
@@ -186,6 +193,9 @@ export async function getByAdSet(scope: Scope, f: Filters): Promise<AdSetRow[]> 
       id: insights.adSetId,
       name: sql<string>`coalesce(max(${adSets.name}), ${insights.adSetId})`,
       status: sql<string | null>`max(${adSets.status})`,
+      targeting: sql<TargetingSpec | null>`any_value(${adSets.targeting})`,
+      optimizationGoal: sql<string | null>`max(${adSets.optimizationGoal})`,
+      adCount: sql<number>`count(distinct ${insights.adId})::int`.mapWith(Number),
       ...sums,
     })
     .from(insights)
@@ -193,7 +203,15 @@ export async function getByAdSet(scope: Scope, f: Filters): Promise<AdSetRow[]> 
     .where(filterWhere(scope, f))
     .groupBy(insights.adSetId)
     .orderBy(desc(sql`sum(${insights.spend})`));
-  return rows.map((r) => ({ id: r.id, name: r.name, status: r.status, ...pickTotals(r) }));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    status: r.status,
+    targeting: r.targeting,
+    optimizationGoal: r.optimizationGoal,
+    adCount: r.adCount,
+    ...pickTotals(r),
+  }));
 }
 
 export type AdRow = Totals & {
