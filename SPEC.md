@@ -92,7 +92,7 @@ The goal's "result" drives day cards, campaign tables, ad cards and highlights.
 ## 5. Client dashboard
 
 **Overview** (`/c/<slug>`):
-1. Greeting ("Good morning, Jordan."), range, comparison period, platform toggle (All / Facebook / Instagram) and date picker (Today, Yesterday, 7/14/30/90 days, This month, Last month, Custom).
+1. Greeting ("Good morning, Jordan."), range, comparison period, platform toggle (All / Facebook / Instagram) and date picker (Today, Yesterday, 7/14/30/90 days, Last 12 months, This month, Last month, Custom up to a year).
 2. Note from the Thinkswell team (optional).
 3. **Ad spend** card → **Agency fee** card → goal KPI cards. Each card has a count-up value, a delta vs the previous equal-length period (green or red depending on whether up is good for that metric), a sparkline and a help tooltip.
 4. Highlights: best day, top campaign, Facebook vs Instagram winner (or "neck and neck").
@@ -103,7 +103,7 @@ The goal's "result" drives day cards, campaign tables, ad cards and highlights.
 
 **Campaigns** (`/c/<slug>/campaigns`): summary stats, then the full sortable/searchable table with a goal-specific extra column (ROAS, lead rate, CPM or LPVs).
 
-**Campaign detail** (`/c/<slug>/campaigns/<id>`): status, objective, flight dates, KPI cards (spend card shows share of total spend), trend chart, day-by-day table with bars, FB vs IG split, ad set cards and ad creative cards (the real image, a playable video or a swipeable carousel, plus a link to Meta's ad preview; copy, spend, results, cost, CTR, "Top performer"). Live ads come first; paused and ended ads sit in a collapsible "Paused & ended" section (open when nothing is running).
+**Campaign detail** (`/c/<slug>/campaigns/<id>`): status, objective, flight dates, KPI cards (spend card shows share of total spend), trend chart, day-by-day table with bars (month by month, from the campaign's first month, for ranges over ~3 months), FB vs IG split, ad set cards and ad creative cards (the real image, a playable video or a swipeable carousel, plus a link to Meta's ad preview; copy, spend, results, cost, CTR, "Top performer"). Live ads come first; paused and ended ads sit in a collapsible "Paused & ended" section (open when nothing is running).
 
 **Ad set cards** (one per ad set that delivered in the period): status, what it's optimized for, ad count; spend, results, cost per result, CTR, reach and share of campaign spend, with a "Best cost" badge (same rule as "Top performer"). Below that, its **targeting** in plain English, read from Meta's targeting spec by `src/lib/targeting.ts`:
 
@@ -123,7 +123,7 @@ When Advantage+ audience is on, a note explains that Meta can reach beyond these
 - **Clients** (`/admin`): a card per client with 7-day spend, result, cost, fee and sparkline, plus "Open dashboard" and "Setup" buttons. Notices for demo mode and for unassigned ad accounts.
 - **Client setup** (`/admin/clients/<id>`): Profile · Dashboard setup · Agency fee · Data access · **Campaigns & groups** (groups editor + per-campaign name/group/goal) · People (invite, per-person access) · Archive.
 - **Team** (`/admin/team`): Thinkswell admins (invite, access link, disable) and every client login with the dashboards it can see.
-- **Data** (`/admin/data`): Windsor status, sync buttons (7d / 30d / 90d backfill), "Test connection", ad accounts with owner client and 30-day spend, and the sync log.
+- **Data** (`/admin/data`): Windsor status, sync buttons (7d / 30d / 90d backfill), **Backfill history** (see §7), "Test connection", ad accounts with owner client and 30-day spend, and the sync log.
 
 ## 7. Data pipeline (Windsor.ai → Postgres)
 
@@ -143,6 +143,7 @@ CLI `npm run sync` ──┘      │
 
 - Dashboards read only from Postgres, so they're fast, never hit Windsor rate limits, and keep working if Windsor has an outage.
 - Each run re-pulls a rolling window (`SYNC_LOOKBACK_DAYS`, default 7) because Meta keeps attributing conversions for up to ~28 days. The Data page has 30 and 90-day buttons for backfills.
+- **Backfill history** pulls any dates Meta still keeps (37 months). The page splits the range into 90-day windows (`src/lib/backfill.ts`) and syncs them newest first, one server action call per window, so none gets near the 300s function limit. It shows progress per window, can stop and resume (a failed window stops the run; "Resume" retries it), and warns before leaving mid-run. Each window is a normal sync run in the log, and re-running a window just replaces it. Its dates default to the last 12 months up to the oldest synced day. Creative previews still refresh only for the last 120 days, so older ads may show a placeholder image.
 - Meta won't combine the `publisher_platform` breakdown with `omni_*` fields, so metrics use the non-omni action types, and metadata comes from a second breakdown-free call.
 - Field mapping lives in `src/lib/sync/windsor-sync.ts` (`METRIC_FIELDS`). To count e.g. pixel-only purchases, change `actions_purchase` to `actions_offsite_conversion_fb_pixel_purchase` there.
 - Steps 2–4 cover at least the last 120 days, so ads that stopped delivering still get current statuses and fresh creative links (Meta CDN links expire after a few days). Creative fields are stored raw in `ads.creative` and interpreted in `src/lib/creative.ts`; if Windsor rejects the combined request, each field group is retried on its own.

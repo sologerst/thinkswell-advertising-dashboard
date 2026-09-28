@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNull, lte, min, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { adAccounts, campaignGroups, campaignSettings, clientAccounts, clientMembers, clients, insights, memberGroups, syncRuns, users } from "@/lib/db/schema";
 import { addDays, todayISO } from "@/lib/dates";
@@ -71,6 +71,13 @@ export async function accountSpend(days = 30) {
 export async function recentSyncRuns(limit = 12) {
   const db = await getDb();
   return db.select().from(syncRuns).orderBy(desc(syncRuns.startedAt)).limit(limit);
+}
+
+/** First day with synced results in any account (null before the first sync). */
+export async function oldestInsightDate() {
+  const db = await getDb();
+  const [r] = await db.select({ d: min(insights.date) }).from(insights);
+  return r?.d ?? null;
 }
 
 export async function membersOf(clientId: string) {

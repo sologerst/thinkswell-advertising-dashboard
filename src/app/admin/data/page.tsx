@@ -2,9 +2,11 @@ import { CircleAlert, CircleCheck, Clock, Database, PlugZap } from "lucide-react
 import type { Metadata } from "next";
 import { runSync, testWindsor } from "@/app/actions/admin";
 import { ActionForm } from "@/components/admin/action-form";
+import { BackfillForm } from "@/components/admin/backfill-form";
 import { Card, SectionTitle } from "@/components/ui";
-import { accountSpend, accountsWithUsage, recentSyncRuns } from "@/lib/admin-data";
-import { fmtRange } from "@/lib/dates";
+import { accountSpend, accountsWithUsage, oldestInsightDate, recentSyncRuns } from "@/lib/admin-data";
+import { defaultBackfillRange, earliestBackfillDate } from "@/lib/backfill";
+import { fmtRange, todayISO } from "@/lib/dates";
 import { formatMetric, timeAgo } from "@/lib/format";
 import { isLiveMode, windsorKey } from "@/lib/windsor/client";
 
@@ -15,7 +17,8 @@ export const maxDuration = 300;
 export default async function DataPage() {
   const live = isLiveMode();
   const key = windsorKey();
-  const [accounts, spend, runs] = await Promise.all([accountsWithUsage(), accountSpend(30), recentSyncRuns(15)]);
+  const [accounts, spend, runs, oldest] = await Promise.all([accountsWithUsage(), accountSpend(30), recentSyncRuns(15), oldestInsightDate()]);
+  const today = todayISO();
 
   return (
     <>
@@ -64,6 +67,7 @@ export default async function DataPage() {
                 </ActionForm>
               </div>
             ))}
+            <BackfillForm today={today} earliest={earliestBackfillDate(today)} defaults={defaultBackfillRange(today, oldest)} oldest={oldest} />
             {live && (
               <div className="rounded-2xl border border-line bg-ink-900/40 p-4">
                 <ActionForm action={testWindsor} submitLabel="Test connection" pendingLabel="Checking…" variant="secondary" footerLeft={<span className="text-xs text-fg-3">Lists the Meta accounts Windsor can see.</span>} />

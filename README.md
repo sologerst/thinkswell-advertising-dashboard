@@ -72,7 +72,8 @@ Setting up a fresh copy:
    - `CRON_SECRET`: any long random string (Vercel Cron sends it automatically)
    - optional: `APP_URL`, `APP_TIMEZONE` (default `America/Chicago`), `SYNC_LOOKBACK_DAYS`,
      `WINDSOR_ATTRIBUTION_WINDOW`, `RESEND_API_KEY` + `EMAIL_FROM`
-4. Deploy, sign in, go to **Admin → Data** and click **Backfill 90 days**.
+4. Deploy, sign in, go to **Admin → Data** and click **Backfill 90 days**. For older results, use
+   **Backfill history** there (up to Meta's 37 months, synced 90 days at a time).
 5. **Admin → Clients → New client**: pick the goal, link the ad account(s), set the agency
    fee, and invite the client's team. Send them the invite link, or it's emailed if Resend
    is configured.

@@ -36,6 +36,13 @@ export function eachDay(from: ISODate, to: ISODate): ISODate[] {
   return out;
 }
 
+/** Same day `n` months later, clamped to the end of shorter months. */
+export function addMonths(d: ISODate, n: number): ISODate {
+  const [y, m, day] = d.split("-").map(Number);
+  const last = new Date(Date.UTC(y!, m! - 1 + n + 1, 0)).getUTCDate();
+  return fromUTC(Date.UTC(y!, m! - 1 + n, Math.min(day!, last)));
+}
+
 export function daysInMonth(d: ISODate) {
   const [y, m] = d.split("-").map(Number);
   return new Date(Date.UTC(y!, m!, 0)).getUTCDate();
@@ -65,6 +72,7 @@ export const fmtWeekday = (d: ISODate) => fmt({ weekday: "short" }).format(toUTC
 export const fmtWeekdayLong = (d: ISODate) => fmt({ weekday: "long" }).format(toUTC(d));
 export const fmtLong = (d: ISODate) => fmt({ weekday: "long", month: "long", day: "numeric" }).format(toUTC(d));
 export const fmtDayYear = (d: ISODate) => fmt({ month: "short", day: "numeric", year: "numeric" }).format(toUTC(d));
+export const fmtMonthYear = (d: ISODate) => fmt({ month: "short", year: "numeric" }).format(toUTC(d));
 
 export function fmtRange(from: ISODate, to: ISODate) {
   if (from === to) return fmtDayYear(from);
@@ -83,6 +91,7 @@ export const RANGE_PRESETS = [
   { key: "14d", label: "Last 14 days" },
   { key: "30d", label: "Last 30 days" },
   { key: "90d", label: "Last 90 days" },
+  { key: "12m", label: "Last 12 months" },
   { key: "mtd", label: "This month" },
   { key: "lastmonth", label: "Last month" },
 ] as const;
@@ -131,6 +140,10 @@ export function resolveRange(params: { range?: string; from?: string; to?: strin
       case "90d":
         to = yesterday;
         from = addDays(to, -89);
+        break;
+      case "12m":
+        to = yesterday;
+        from = addDays(addMonths(to, -12), 1);
         break;
       case "mtd":
         to = today;
