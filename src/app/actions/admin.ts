@@ -9,7 +9,8 @@ import { requireAdmin } from "@/lib/auth/current";
 import { issueToken, tokenLink } from "@/lib/auth/tokens";
 import { getDb } from "@/lib/db";
 import { campaignGroups, campaignSettings, clientAccounts, clientCampaigns, clientMembers, clients, memberGroups, users } from "@/lib/db/schema";
-import { addDays, todayISO } from "@/lib/dates";
+import { BACKFILL_CHUNK_DAYS, META_HISTORY_MONTHS, earliestBackfillDate } from "@/lib/backfill";
+import { addDays, diffDays, isISODate, todayISO } from "@/lib/dates";
 import { sendAccessEmail } from "@/lib/email";
 import { GOAL_PRESETS, METRIC_MAP } from "@/lib/metrics/catalog";
 import { syncDemo } from "@/lib/sync/demo-sync";
@@ -455,6 +456,32 @@ export async function runSync(_: ActionState, formData: FormData): Promise<Actio
     const r = await syncDemo(db, { from, to: today, triggeredBy: admin.email });
     revalidatePath("/", "layout");
     return { ok: `Demo data refreshed (${r.rows.toLocaleString()} rows). Add WINDSOR_API_KEY to pull real Meta data.` };
+  } catch (e) {
+    revalidatePath("/admin/data");
+    return { error: (e as Error).message };
+  }
+}
+
+export type BackfillResult = { rows: number; warnings: number } | { error: string };
+
+/**
+ * Syncs one window of a history backfill. The Data page calls this window by
+ * window (see lib/backfill.ts) so each call stays inside the function time limit.
+ */
+export async function syncBackfillWindow(from: string, to: string): Promise<BackfillResult> {
+  const admin = await requireAdmin();
+  const today = todayISO();
+  if (!isISODate(from) || !isISODate(to) || from > to) return { error: "Pick a valid date range." };
+  if (to > today) return { error: "The end date can't be in the future." };
+  if (diffDays(from, to) >= BACKFILL_CHUNK_DAYS) return { error: `Each window can cover at most ${BACKFILL_CHUNK_DAYS} days.` };
+  if (from < earliestBackfillDate(today)) return { error: `Meta only keeps the last ${META_HISTORY_MONTHS} months of results.` };
+  const db = await getDb();
+  try {
+    const r = isLiveMode()
+      ? await syncWindsor(db, { from, to, triggeredBy: admin.email })
+      : { ...(await syncDemo(db, { from, to, triggeredBy: admin.email })), warnings: [] };
+    revalidatePath("/", "layout");
+    return { rows: r.rows, warnings: r.warnings.length };
   } catch (e) {
     revalidatePath("/admin/data");
     return { error: (e as Error).message };

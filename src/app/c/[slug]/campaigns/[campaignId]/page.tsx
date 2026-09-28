@@ -15,10 +15,10 @@ import { loadClientContext, setupFor } from "@/lib/client-context";
 import { isAdOff } from "@/lib/creative";
 import { getDb } from "@/lib/db";
 import { adAccounts } from "@/lib/db/schema";
-import { addDays, fmtDayYear, fmtRange, fmtWeekday } from "@/lib/dates";
+import { addDays, diffDays, fmtDayYear, fmtMonthYear, fmtRange, fmtWeekday, type ISODate } from "@/lib/dates";
 import { formatMetric, titleCase } from "@/lib/format";
 import { GOAL_PRESETS, getMetric } from "@/lib/metrics/catalog";
-import { getByAd, getByAdSet, getByPlatform, getCampaignInScope, getDaily, sumRows } from "@/lib/metrics/query";
+import { getByAd, getByAdSet, getByPlatform, getCampaignInScope, getDaily, sumRows, type DailyRow } from "@/lib/metrics/query";
 import { clientKpis, kpiFor } from "@/lib/metrics/report";
 import { keepQuery, readDashboardParams } from "@/lib/params";
 
@@ -84,6 +84,10 @@ export default async function CampaignPage({ params, searchParams }: Props) {
       prev: prevDaily.map((d) => def.compute(d)),
     };
   });
+
+  // Long ranges read better month by month (from the campaign's first month) than as hundreds of daily rows.
+  const monthly = diffDays(range.from, range.to) > 92;
+  const tableRows = monthly ? sumByMonth(daily).filter((m) => m.end >= campaign.firstDate) : daily.map((d) => ({ ...d, end: d.date }));
 
   const ended = campaign.status === "COMPLETED" || (campaign.lastDate < addDays(today, -2) && campaign.status !== "ACTIVE");
   const flight = ended ? `Ran ${fmtRange(campaign.firstDate, campaign.lastDate)}` : `Running since ${fmtDayYear(campaign.firstDate)}`;
@@ -184,20 +188,32 @@ export default async function CampaignPage({ params, searchParams }: Props) {
 
       <section className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
         <Card className="p-5 sm:p-6">
-          <SectionTitle eyebrow="Day by day" title="Daily numbers" className="mb-4" />
+          <SectionTitle eyebrow={monthly ? "Month by month" : "Day by day"} title={monthly ? "Monthly numbers" : "Daily numbers"} className="mb-4" />
           <BreakdownTable
-            rows={[...daily].reverse()}
+            rows={[...tableRows].reverse()}
             rowKey={(d) => d.date}
-            highlight={(d) => d.date === today}
-            first={{
-              label: "Day",
-              render: (d) => (
-                <div>
-                  <div className="font-semibold text-fg">{d.date === today ? "Today" : fmtWeekday(d.date)}</div>
-                  <div className="text-xs text-fg-3">{fmtDayYear(d.date)}</div>
-                </div>
-              ),
-            }}
+            highlight={(d) => d.date <= today && today <= d.end}
+            first={
+              monthly
+                ? {
+                    label: "Month",
+                    render: (d) => (
+                      <div>
+                        <div className="font-semibold text-fg">{fmtMonthYear(d.date)}</div>
+                        <div className="text-xs text-fg-3">{fmtRange(d.date, d.end)}</div>
+                      </div>
+                    ),
+                  }
+                : {
+                    label: "Day",
+                    render: (d) => (
+                      <div>
+                        <div className="font-semibold text-fg">{d.date === today ? "Today" : fmtWeekday(d.date)}</div>
+                        <div className="text-xs text-fg-3">{fmtDayYear(d.date)}</div>
+                      </div>
+                    ),
+                  }
+            }
             columns={[
               { key: "spend", label: "Spend", format: "currency", get: (d) => d.spend, bar: "var(--color-series-1)" },
               { key: "impr", label: "Impr.", format: "number", get: (d) => d.impressions, hideOnMobile: true },
@@ -242,4 +258,11 @@ export default async function CampaignPage({ params, searchParams }: Props) {
       </section>
     </>
   );
+}
+
+/** Daily rows summed per calendar month; `date`/`end` are the first and last day covered. */
+function sumByMonth(daily: DailyRow[]): (DailyRow & { end: ISODate })[] {
+  const months = new Map<string, DailyRow[]>();
+  for (const d of daily) months.set(d.date.slice(0, 7), [...(months.get(d.date.slice(0, 7)) ?? []), d]);
+  return [...months.values()].map((days) => ({ ...sumRows(days), date: days[0]!.date, end: days.at(-1)!.date }));
 }
