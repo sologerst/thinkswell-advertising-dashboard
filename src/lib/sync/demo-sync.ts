@@ -42,7 +42,10 @@ export async function syncDemo(db: Db, opts: { from: ISODate; to: ISODate; trigg
     await tx
       .insert(adSets)
       .values(data.adSets)
-      .onConflictDoUpdate({ target: adSets.id, set: { name: sql`excluded.name`, status: sql`excluded.status` } });
+      .onConflictDoUpdate({
+        target: adSets.id,
+        set: { name: sql`excluded.name`, status: sql`excluded.status`, targeting: sql`excluded.targeting`, optimizationGoal: sql`excluded.optimization_goal` },
+      });
     await tx
       .insert(ads)
       .values(data.ads)

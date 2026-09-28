@@ -13,7 +13,7 @@ sees and how their dashboard is set up.
 |---|---|
 | Matches thinkswell.com branding | Navy `#111522` base with the site's cyan / gold / purple / coral accents. DM Serif Display headlines, DM Sans UI. The bulb mark + lowercase `thinkswell` lockup. Uppercase tracked eyebrows. |
 | Quick numbers by day | KPI cards with sparklines and "vs previous period" deltas; a strip of **day cards** (spend, results, cost per result, best-day badge); a daily trend chart. |
-| Drill into campaigns | A Campaigns list (search, live-only filter, sortable) → a campaign page with KPIs, trend, a day-by-day table, FB vs IG split, ad sets and ad creative cards. |
+| Drill into campaigns | A Campaigns list (search, live-only filter, sortable) → a campaign page with KPIs, trend, a day-by-day table, FB vs IG split, ad set cards (results + targeting) and ad creative cards. |
 | Per-client logins and setups | Clients have their own goal preset, KPI cards, agency fee, ad accounts and campaign visibility rules. Users are invited per client. |
 | Actual spend + agency fee | **Ad spend** card (exactly what Meta billed) followed by a separate **Agency fee** card showing the fee and total investment. |
 | Modern and fun | Glow-on-hover cards, count-up numbers, auto-generated highlights ("Best day", "Top campaign", "Instagram is winning"), live-sync pulse, "Top performer" creative badge, a note from the Thinkswell team. |
@@ -103,7 +103,20 @@ The goal's "result" drives day cards, campaign tables, ad cards and highlights.
 
 **Campaigns** (`/c/<slug>/campaigns`): summary stats, then the full sortable/searchable table with a goal-specific extra column (ROAS, lead rate, CPM or LPVs).
 
-**Campaign detail** (`/c/<slug>/campaigns/<id>`): status, objective, flight dates, KPI cards (spend card shows share of total spend), trend chart, day-by-day table with bars, FB vs IG split, ad sets table and ad creative cards (the real image, a playable video or a swipeable carousel, plus a link to Meta's ad preview; copy, spend, results, cost, CTR, "Top performer"). Live ads come first; paused and ended ads sit in a collapsible "Paused & ended" section (open when nothing is running).
+**Campaign detail** (`/c/<slug>/campaigns/<id>`): status, objective, flight dates, KPI cards (spend card shows share of total spend), trend chart, day-by-day table with bars, FB vs IG split, ad set cards and ad creative cards (the real image, a playable video or a swipeable carousel, plus a link to Meta's ad preview; copy, spend, results, cost, CTR, "Top performer"). Live ads come first; paused and ended ads sit in a collapsible "Paused & ended" section (open when nothing is running).
+
+**Ad set cards** (one per ad set that delivered in the period): status, what it's optimized for, ad count; spend, results, cost per result, CTR, reach and share of campaign spend, with a "Best cost" badge (same rule as "Top performer"). Below that, its **targeting** in plain English, read from Meta's targeting spec by `src/lib/targeting.ts`:
+
+| Row | From the spec |
+|---|---|
+| Locations | Countries, regions, DMAs, cities (+radius), ZIPs, pins; a note when it's only people who live there / were recently there / are traveling |
+| People | Age range (65 means 65+) and genders |
+| Audiences | Custom and lookalike audiences |
+| Interests | Detailed targeting (interests, behaviors, job titles…); "narrow further" groups shown as "and also"; a note when Meta may expand beyond them |
+| Excluding | Excluded audiences, detailed exclusions and excluded locations |
+| Placements | Platforms with their positions, or "Advantage+ placements"; "Mobile only" / "Desktop only" |
+
+When Advantage+ audience is on, a note explains that Meta can reach beyond these settings. Long lists fold into "+N more". Ad sets without a synced spec say so instead.
 
 ## 6. Admin console
 
@@ -122,16 +135,18 @@ CLI `npm run sync` ──┘      │
                             └─ per ad account:
                                  1. GET connectors.windsor.ai/facebook  (daily × ad × publisher_platform metrics)
                                  2. GET connectors.windsor.ai/facebook  (statuses, objectives, thumbnails; no breakdown)
-                                 3. GET connectors.windsor.ai/facebook  (creative: image / video URLs, preview links)
-                                 4. upsert campaigns / ad_sets / ads
-                                 5. delete + insert `insights` for the window (in one transaction)
+                                 3. GET connectors.windsor.ai/facebook  (ad sets: targeting spec, optimization goal; in parallel with 2)
+                                 4. GET connectors.windsor.ai/facebook  (creative: image / video URLs, preview links; in the background)
+                                 5. upsert campaigns / ad_sets / ads
+                                 6. delete + insert `insights` for the window (in one transaction)
 ```
 
 - Dashboards read only from Postgres, so they're fast, never hit Windsor rate limits, and keep working if Windsor has an outage.
 - Each run re-pulls a rolling window (`SYNC_LOOKBACK_DAYS`, default 7) because Meta keeps attributing conversions for up to ~28 days. The Data page has 30 and 90-day buttons for backfills.
 - Meta won't combine the `publisher_platform` breakdown with `omni_*` fields, so metrics use the non-omni action types, and metadata comes from a second breakdown-free call.
 - Field mapping lives in `src/lib/sync/windsor-sync.ts` (`METRIC_FIELDS`). To count e.g. pixel-only purchases, change `actions_purchase` to `actions_offsite_conversion_fb_pixel_purchase` there.
-- Steps 2 and 3 cover at least the last 120 days, so ads that stopped delivering still get current statuses and fresh creative links (Meta CDN links expire after a few days). Creative fields are stored raw in `ads.creative` and interpreted in `src/lib/creative.ts`; if Windsor rejects the combined request, each field group is retried on its own.
+- Steps 2–4 cover at least the last 120 days, so ads that stopped delivering still get current statuses and fresh creative links (Meta CDN links expire after a few days). Creative fields are stored raw in `ads.creative` and interpreted in `src/lib/creative.ts`; if Windsor rejects the combined request, each field group is retried on its own.
+- Ad set targeting comes from `adset_targeting` (Meta's spec as JSON, stored raw in `ad_sets.targeting`) and `adsset_optimization_goal` (Windsor's spelling). It's its own request so a rejected field there never costs statuses; a failure or unreadable JSON is a warning and keeps the last good targeting.
 - Every run is logged in `sync_runs`. Per-account failures become warnings and don't abort the rest of the run.
 
 | Our column | Windsor field |
@@ -162,7 +177,7 @@ client_accounts(client_id, account_id)        -- which ad accounts feed it
 client_campaigns(client_id, campaign_id)      -- include/exclude list
 ad_accounts(id, name, currency, source, last_synced_at)
 campaigns(id, account_id, name, status, objective, …)
-ad_sets(id, campaign_id, account_id, name, status)
+ad_sets(id, campaign_id, account_id, name, status, targeting jsonb, optimization_goal)
 ads(id, ad_set_id, campaign_id, account_id, name, status, thumbnail_url, title, body, creative jsonb)
 insights(date, account_id, campaign_id, ad_set_id, ad_id, platform, spend, impressions, reach, clicks,
          link_clicks, landing_page_views, purchases, purchase_value, add_to_cart, initiate_checkout,

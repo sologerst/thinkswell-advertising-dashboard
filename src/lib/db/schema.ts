@@ -212,6 +212,10 @@ export const adSets = pgTable(
     accountId: text("account_id").notNull(),
     name: text("name").notNull(),
     status: text("status"),
+    /** Meta's targeting spec as synced from Windsor (`adset_targeting`); see src/lib/targeting.ts. */
+    targeting: jsonb("targeting").$type<TargetingSpec>(),
+    /** What Meta optimizes delivery for, e.g. OFFSITE_CONVERSIONS or LANDING_PAGE_VIEWS. */
+    optimizationGoal: text("optimization_goal"),
   },
   (t) => [index("ad_sets_campaign_idx").on(t.campaignId)],
 );
@@ -311,6 +315,9 @@ export const clientCampaignsRelations = relations(clientCampaigns, ({ one }) => 
 
 /** Windsor creative fields stored per ad, keyed by Windsor field ID. */
 export type CreativeFields = Record<string, string | null>;
+
+/** Meta ad set targeting spec (loosely typed: it's Meta's JSON, read defensively). */
+export type TargetingSpec = Record<string, unknown>;
 
 export type User = typeof users.$inferSelect;
 export type Client = typeof clients.$inferSelect;

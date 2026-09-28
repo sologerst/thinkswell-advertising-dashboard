@@ -5,6 +5,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TrendChart, type TrendMetric } from "@/components/charts/trend-chart";
 import { AdCards } from "@/components/dashboard/ad-cards";
+import { AdSetCards } from "@/components/dashboard/ad-set-cards";
 import { BreakdownTable } from "@/components/dashboard/breakdown-table";
 import { ACCENT_HEX, KpiCard } from "@/components/dashboard/kpi-card";
 import { DashboardHeader } from "@/components/dashboard/page-header";
@@ -64,6 +65,7 @@ export default async function CampaignPage({ params, searchParams }: Props) {
   const cur = sumRows(daily);
   const prev = sumRows(prevDaily);
   const liveAds = adRows.filter((a) => !isAdOff(a.status)).length;
+  const liveAdSets = adSetRows.filter((s) => !isAdOff(s.status)).length;
   const all = sumRows(allDaily);
   const spend = kpiFor(getMetric("spend")!, cur, prev, daily);
   const kpis = clientKpis(setup).map((m) => kpiFor(m, cur, prev, daily));
@@ -211,29 +213,19 @@ export default async function CampaignPage({ params, searchParams }: Props) {
         </Card>
       </section>
 
-      <Card className="mt-6 p-5 sm:p-6">
-        <SectionTitle eyebrow="Audiences" title="Ad sets" className="mb-4" />
-        <BreakdownTable
-          rows={adSetRows}
-          rowKey={(r) => r.id}
-          first={{
-            label: "Ad set",
-            render: (r) => (
-              <div className="flex items-center gap-2">
-                <span className="max-w-[320px] truncate font-semibold text-fg">{r.name}</span>
-                <StatusPill status={r.status} />
-              </div>
-            ),
-          }}
-          columns={[
-            { key: "spend", label: "Spend", format: "currency", get: (r) => r.spend, bar: "var(--color-series-1)" },
-            { key: "reach", label: "Reach", format: "number", get: (r) => r.reach, hideOnMobile: true },
-            { key: "ctr", label: "CTR", format: "percent", get: (r) => (r.impressions ? r.linkClicks / r.impressions : null), hideOnMobile: true },
-            { key: "result", label: resultMetric.short, format: resultMetric.format, get: (r) => resultMetric.compute(r), strong: true, bar: "var(--color-series-2)" },
-            { key: "cost", label: costMetric.short, format: costMetric.format, get: (r) => costMetric.compute(r) },
-          ]}
+      <section className="mt-8">
+        <SectionTitle
+          eyebrow="Audiences"
+          title="Ad sets"
+          action={
+            <span className="text-xs text-fg-3">
+              {formatMetric(liveAdSets, "number")} live · {formatMetric(adSetRows.length - liveAdSets, "number")} paused or ended
+            </span>
+          }
+          className="mb-4"
         />
-      </Card>
+        <AdSetCards adSets={adSetRows} resultMetric={resultMetric} costMetric={costMetric} />
+      </section>
 
       <section className="mt-8">
         <SectionTitle
